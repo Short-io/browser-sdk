@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Short.io Browser SDK - Basic Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .success {
+            border-left-color: #28a745;
+            background: #d4edda;
+            color: #155724;
+        }
+        .link {
+            word-break: break-all;
+            color: #007bff;
+            text-decoration: none;
+        }
+        .link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Short.io Browser SDK Example</h1>
+        
+        <div class="form-group">
+            <label for="apiKey">Public API Key:</label>
+            <input type="text" id="apiKey" placeholder="Enter your Short.io public API key">
+        </div>
+        
+        <div class="form-group">
+            <label for="domain">Domain:</label>
+            <input type="text" id="domain" placeholder="e.g., your-domain.com">
+        </div>
+        
+        <div class="form-group">
+            <label for="originalUrl">URL to Shorten:</label>
+            <input type="url" id="originalUrl" placeholder="https://example.com/very-long-url">
+        </div>
+        
+        <div class="form-group">
+            <label for="title">Title (optional):</label>
+            <input type="text" id="title" placeholder="Link title">
+        </div>
+        
+        <button onclick="createShortLink()">Create Short Link</button>
+        
+        <hr style="margin: 30px 0;">
+        
+        <h2>Expand Short Link</h2>
+        
+        <div class="form-group">
+            <label for="expandDomain">Domain:</label>
+            <input type="text" id="expandDomain" placeholder="e.g., your-domain.com">
+        </div>
+        
+        <div class="form-group">
+            <label for="path">Path:</label>
+            <input type="text" id="path" placeholder="e.g., abc123">
+        </div>
+        
+        <button onclick="expandShortLink()">Expand Link</button>
+        
+        <div id="result"></div>
+    </div>
+
+    <script src="../dist/index.umd.js"></script>
+    <script>
+        let client = null;
+
+        function initializeClient() {
+            const apiKey = document.getElementById('apiKey').value;
+            if (!apiKey) {
+                showResult('Please enter your API key', 'error');
+                return false;
+            }
+            
+            client = ShortioClient.createClient({
+                publicKey: apiKey
+            });
+            return true;
+        }
+
+        async function createShortLink() {
+            if (!initializeClient()) return;
+            
+            const domain = document.getElementById('domain').value;
+            const originalUrl = document.getElementById('originalUrl').value;
+            const title = document.getElementById('title').value;
+            
+            if (!domain || !originalUrl) {
+                showResult('Please fill in required fields (domain and URL)', 'error');
+                return;
+            }
+            
+            try {
+                const button = event.target;
+                button.disabled = true;
+                button.textContent = 'Creating...';
+                
+                const request = {
+                    originalURL: originalUrl,
+                    domain: domain
+                };
+                
+                if (title) {
+                    request.title = title;
+                }
+                
+                const result = await client.createLink(request);
+                
+                showResult(`
+                    <strong>Short link created successfully!</strong><br>
+                    <strong>Short URL:</strong> <a href="${result.shortURL}" target="_blank" class="link">${result.shortURL}</a><br>
+                    <strong>Original URL:</strong> <a href="${result.originalURL}" target="_blank" class="link">${result.originalURL}</a><br>
+                    <strong>Path:</strong> ${result.path}<br>
+                    <strong>Created:</strong> ${new Date(result.createdAt).toLocaleString()}
+                `, 'success');
+                
+            } catch (error) {
+                showResult(`Error: ${error.message}`, 'error');
+            } finally {
+                const button = event.target;
+                button.disabled = false;
+                button.textContent = 'Create Short Link';
+            }
+        }
+
+        async function expandShortLink() {
+            if (!initializeClient()) return;
+            
+            const domain = document.getElementById('expandDomain').value;
+            const path = document.getElementById('path').value;
+            
+            if (!domain || !path) {
+                showResult('Please fill in domain and path fields', 'error');
+                return;
+            }
+            
+            try {
+                const button = event.target;
+                button.disabled = true;
+                button.textContent = 'Expanding...';
+                
+                const result = await client.expandLink({
+                    domain: domain,
+                    path: path
+                });
+                
+                showResult(`
+                    <strong>Link expanded successfully!</strong><br>
+                    <strong>Original URL:</strong> <a href="${result.originalURL}" target="_blank" class="link">${result.originalURL}</a><br>
+                    <strong>Short URL:</strong> <a href="${result.shortURL}" target="_blank" class="link">${result.shortURL}</a><br>
+                    <strong>Title:</strong> ${result.title || 'N/A'}<br>
+                    <strong>Clicks:</strong> ${result.clicks || 0}<br>
+                    <strong>Created:</strong> ${new Date(result.createdAt).toLocaleString()}
+                `, 'success');
+                
+            } catch (error) {
+                showResult(`Error: ${error.message}`, 'error');
+            } finally {
+                const button = event.target;
+                button.disabled = false;
+                button.textContent = 'Expand Link';
+            }
+        }
+
+        function showResult(message, type) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = message;
+            resultDiv.className = `result ${type}`;
+        }
+    </script>
+</body>
+</html>
