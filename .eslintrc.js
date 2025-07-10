@@ -1,8 +1,7 @@
 module.exports = {
   parser: '@typescript-eslint/parser',
   extends: [
-    'eslint:recommended',
-    '@typescript-eslint/recommended'
+    'eslint:recommended'
   ],
   plugins: ['@typescript-eslint'],
   env: {
@@ -11,14 +10,16 @@ module.exports = {
     node: true,
     jest: true
   },
+  globals: {
+    RequestInit: 'readonly',
+    fetch: 'readonly'
+  },
   parserOptions: {
     ecmaVersion: 2018,
     sourceType: 'module'
   },
   rules: {
     '@typescript-eslint/no-unused-vars': 'error',
-    '@typescript-eslint/explicit-function-return-type': 'warn',
-    '@typescript-eslint/no-explicit-any': 'warn',
     'prefer-const': 'error',
     'no-var': 'error'
   }

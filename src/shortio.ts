@@ -4,8 +4,42 @@ import type {
   CreateLinkResponse,
   ExpandLinkRequest,
   ExpandLinkResponse,
-  ApiError
+  ApiError,
+  ConversionTrackingOptions,
+  ConversionTrackingResult,
 } from './types';
+
+// Base64 encoding utility for ArrayBuffer
+function base64encode(arrayBuffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+export const createSecure = async (originalURL: string): Promise<{ securedOriginalURL: string; securedShortUrl: string }> => {
+  try {
+    const cryptoKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 128 }, true, [
+      "encrypt",
+      "decrypt",
+    ]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const urlData = new TextEncoder().encode(originalURL);
+    const encryptedUrl = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, urlData);
+    const encryptedUrlBase64 = base64encode(encryptedUrl);
+    const encryptedIvBase64 = base64encode(iv.buffer);
+    const securedOriginalURL = `shortsecure://${encryptedUrlBase64}?${encryptedIvBase64}`;
+    const exportedKey = await crypto.subtle.exportKey("raw", cryptoKey);
+    const keyBase64 = base64encode(exportedKey);
+    const securedShortUrl = `#${keyBase64}`;
+    return { securedOriginalURL, securedShortUrl };
+  } catch (error) {
+    console.error(error);
+    throw error;
+  }
+};
 
 export class ShortioClient {
   private config: ShortioConfig;
@@ -56,6 +90,71 @@ export class ShortioClient {
     });
 
     return this.makeRequest<ExpandLinkResponse>(`/expand?${params}`);
+  }
+
+  trackConversion(options: ConversionTrackingOptions): ConversionTrackingResult {
+    const urlParams = new URLSearchParams(window.location.search);
+    const clid = urlParams.get('clid');
+    
+    if (!clid) {
+      return {
+        success: false,
+        domain: options.domain
+      };
+    }
+
+    const conversionUrl = `https://${options.domain}/.shortio/conversion`;
+    const params = new URLSearchParams({ clid });
+    
+    if (options.conversionId) {
+      params.append('c', options.conversionId);
+    }
+
+    const fullUrl = `${conversionUrl}?${params}`;
+
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(fullUrl);
+      } else {
+        fetch(fullUrl, { method: 'GET', mode: 'no-cors' }).catch(() => {});
+      }
+      
+      return {
+        success: true,
+        conversionId: options.conversionId,
+        clid,
+        domain: options.domain
+      };
+    } catch {
+      return {
+        success: false,
+        domain: options.domain
+      };
+    }
+  }
+
+  getClickId(): string | null {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('clid');
+  }
+
+  async createEncryptedLink(request: CreateLinkRequest): Promise<CreateLinkResponse> {
+    const { securedOriginalURL, securedShortUrl } = await createSecure(request.originalURL);
+    
+    const payload = {
+      ...request,
+      originalURL: securedOriginalURL,
+    };
+
+    const response = await this.makeRequest<CreateLinkResponse>('/public', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+
+    return {
+      ...response,
+      shortURL: response.shortURL + securedShortUrl,
+    };
   }
 }
 
