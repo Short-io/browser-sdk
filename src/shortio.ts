@@ -46,7 +46,7 @@ export class ShortioClient {
 
   constructor(config: ShortioConfig) {
     this.config = {
-      baseUrl: 'https://api.short.io/links',
+      baseUrl: 'https://api.short.io',
       ...config
     };
   }
@@ -77,7 +77,7 @@ export class ShortioClient {
   }
 
   async createLink(request: CreateLinkRequest): Promise<CreateLinkResponse> {
-    return this.makeRequest<CreateLinkResponse>('/public', {
+    return this.makeRequest<CreateLinkResponse>('/links/public', {
       method: 'POST',
       body: JSON.stringify(request)
     });
@@ -89,7 +89,7 @@ export class ShortioClient {
       path: request.path
     });
 
-    return this.makeRequest<ExpandLinkResponse>(`/expand?${params}`);
+    return this.makeRequest<ExpandLinkResponse>(`/links/expand?${params}`);
   }
 
   trackConversion(options: ConversionTrackingOptions): ConversionTrackingResult {
@@ -113,11 +113,7 @@ export class ShortioClient {
     const fullUrl = `${conversionUrl}?${params}`;
 
     try {
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(fullUrl);
-      } else {
-        fetch(fullUrl, { method: 'GET', mode: 'no-cors' }).catch(() => {});
-      }
+      navigator.sendBeacon(fullUrl);
       
       return {
         success: true,
@@ -146,7 +142,7 @@ export class ShortioClient {
       originalURL: securedOriginalURL,
     };
 
-    const response = await this.makeRequest<CreateLinkResponse>('/public', {
+    const response = await this.makeRequest<CreateLinkResponse>('/links/public', {
       method: 'POST',
       body: JSON.stringify(payload)
     });
