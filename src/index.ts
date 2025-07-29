@@ -5,5 +5,7 @@ export type {
   CreateLinkResponse,
   ExpandLinkRequest,
   ExpandLinkResponse,
-  ApiError
+  ApiError,
+  ConversionTrackingOptions,
+  ConversionTrackingResult,
 } from './types';
