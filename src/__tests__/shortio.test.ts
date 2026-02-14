@@ -1,4 +1,4 @@
-import { ShortioClient, createClient } from '../shortio';
+import { ShortioClient, createClient, createSecure } from '../shortio';
 import type { CreateLinkRequest, ExpandLinkRequest, ConversionTrackingOptions } from '../types';
 
 // Mock fetch globally
@@ -101,6 +101,47 @@ describe('ShortioClient', () => {
       expect(result).toEqual(mockResponse);
     });
 
+    it('should send all optional parameters', async () => {
+      (fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({})
+      });
+
+      const request: CreateLinkRequest = {
+        originalURL: 'https://example.com',
+        domain: '9qr.de',
+        path: 'custom',
+        title: 'Title',
+        tags: ['tag1', 'tag2'],
+        folderId: 'folder-1',
+        cloaking: true,
+        password: 'secret',
+        passwordContact: true,
+        redirectType: 301,
+        utmSource: 'twitter',
+        utmMedium: 'social',
+        utmCampaign: 'launch',
+        utmContent: 'cta',
+        utmTerm: 'sdk',
+        androidURL: 'https://play.google.com/app',
+        iphoneURL: 'https://apps.apple.com/app',
+        clicksLimit: 100,
+        skipQS: true,
+        archived: false,
+        splitURL: 'https://example.com/b',
+        splitPercent: 50,
+        integrationGA: 'UA-123',
+        integrationGTM: 'GTM-123',
+        integrationFB: 'fb-pixel',
+        integrationAdroll: 'adroll-id',
+      };
+
+      await client.createLink(request);
+
+      const sentBody = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(sentBody).toEqual(request);
+    });
+
     it('should handle API errors', async () => {
       (fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
@@ -115,6 +156,29 @@ describe('ShortioClient', () => {
       };
 
       await expect(client.createLink(request)).rejects.toThrow('Invalid URL');
+    });
+
+    it('should prefer message over error in API error response', async () => {
+      (fetch as jest.Mock).mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        json: async () => ({ error: 'validation_error', message: 'Domain is required' })
+      });
+
+      await expect(client.createLink({
+        originalURL: 'https://example.com',
+        domain: ''
+      })).rejects.toThrow('Domain is required');
+    });
+
+    it('should handle fetch rejection (network failure)', async () => {
+      (fetch as jest.Mock).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+      await expect(client.createLink({
+        originalURL: 'https://example.com',
+        domain: '9qr.de'
+      })).rejects.toThrow('Failed to fetch');
     });
   });
 
@@ -182,13 +246,36 @@ describe('ShortioClient', () => {
   });
 
   describe('configuration', () => {
-    it('should use custom base URL', () => {
+    it('should use custom base URL', async () => {
       const customClient = new ShortioClient({
         publicKey: 'test-key',
         baseUrl: 'https://custom.api.url'
       });
 
-      expect(customClient).toBeInstanceOf(ShortioClient);
+      (fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({})
+      });
+
+      await customClient.createLink({
+        originalURL: 'https://example.com',
+        domain: '9qr.de'
+      });
+
+      expect((fetch as jest.Mock).mock.calls[0][0]).toBe(
+        'https://custom.api.url/links/public'
+      );
+    });
+
+    it('should default base URL to https://api.short.io', async () => {
+      (fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({})
+      });
+
+      await client.expandLink({ domain: '9qr.de', path: 'test' });
+
+      expect((fetch as jest.Mock).mock.calls[0][0]).toContain('https://api.short.io/');
     });
   });
 
@@ -270,23 +357,39 @@ describe('ShortioClient', () => {
         domain: 'example.com'
       });
     });
+
+    it('should extract clid when URL has multiple query params', () => {
+      (window as any).location.search = '?utm_source=twitter&clid=abc&ref=home';
+      (navigator.sendBeacon as jest.Mock).mockReturnValue(true);
+
+      const result = client.trackConversion({ domain: 'example.com' });
+
+      expect(result.success).toBe(true);
+      expect(result.clid).toBe('abc');
+    });
   });
 
   describe('getClickId', () => {
     it('should return clid from URL params', () => {
       (window as any).location.search = '?clid=test-click-id&other=param';
-      
+
       const result = client.getClickId();
-      
+
       expect(result).toBe('test-click-id');
     });
 
     it('should return null when no clid in URL', () => {
       (window as any).location.search = '?other=param';
-      
+
       const result = client.getClickId();
-      
+
       expect(result).toBeNull();
+    });
+
+    it('should return null when search string is empty', () => {
+      (window as any).location.search = '';
+
+      expect(client.getClickId()).toBeNull();
     });
   });
 
@@ -335,6 +438,41 @@ describe('ShortioClient', () => {
       expect(result.originalURL).toBe(mockResponse.originalURL);
     });
 
+    it('should not send original URL in plaintext', async () => {
+      (fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ shortURL: 'https://9qr.de/x' })
+      });
+
+      await client.createEncryptedLink({
+        originalURL: 'https://secret.example.com',
+        domain: '9qr.de'
+      });
+
+      const sentBody = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(sentBody.originalURL).not.toBe('https://secret.example.com');
+      expect(sentBody.originalURL).toMatch(/^shortsecure:\/\//);
+    });
+
+    it('should preserve other request fields in encrypted link', async () => {
+      (fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ shortURL: 'https://9qr.de/x' })
+      });
+
+      await client.createEncryptedLink({
+        originalURL: 'https://example.com',
+        domain: '9qr.de',
+        title: 'My Title',
+        tags: ['encrypted']
+      });
+
+      const sentBody = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(sentBody.domain).toBe('9qr.de');
+      expect(sentBody.title).toBe('My Title');
+      expect(sentBody.tags).toEqual(['encrypted']);
+    });
+
     it('should handle encrypted link creation errors', async () => {
       (fetch as jest.Mock).mockResolvedValueOnce({
         ok: false,
@@ -350,6 +488,36 @@ describe('ShortioClient', () => {
       };
 
       await expect(client.createEncryptedLink(request)).rejects.toThrow('Invalid password');
+    });
+  });
+
+  describe('createSecure', () => {
+    it('should return securedOriginalURL with shortsecure:// protocol', async () => {
+      const result = await createSecure('https://example.com');
+
+      expect(result.securedOriginalURL).toMatch(/^shortsecure:\/\//);
+    });
+
+    it('should return securedShortUrl starting with #', async () => {
+      const result = await createSecure('https://example.com');
+
+      expect(result.securedShortUrl).toMatch(/^#/);
+    });
+
+    it('should call crypto.subtle.generateKey with AES-GCM', async () => {
+      await createSecure('https://example.com');
+
+      expect(mockCrypto.subtle.generateKey).toHaveBeenCalledWith(
+        { name: 'AES-GCM', length: 128 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+    });
+
+    it('should propagate crypto errors', async () => {
+      mockCrypto.subtle.generateKey.mockRejectedValueOnce(new Error('Crypto not available'));
+
+      await expect(createSecure('https://example.com')).rejects.toThrow('Crypto not available');
     });
   });
 });
