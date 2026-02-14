@@ -47,7 +47,7 @@ export default [
         expect: 'readonly',
         beforeEach: 'readonly',
         afterEach: 'readonly',
-        jest: 'readonly',
+        vi: 'readonly',
         RequestInit: 'readonly',
         fetch: 'readonly',
         global: 'readonly',

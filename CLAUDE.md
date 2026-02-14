@@ -11,13 +11,13 @@ Browser SDK for Short.io API (`@short.io/client-browser`). Zero runtime dependen
 ```bash
 npm run build        # Rollup build → CJS, ESM, UMD in dist/
 npm run dev          # Rollup watch mode
-npm test             # Jest with jsdom
-npm run test:watch   # Jest watch mode
+npm test             # Vitest with jsdom
+npm run test:watch   # Vitest watch mode
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint src/**/*.ts
 ```
 
-Run a single test: `npx jest --testPathPattern='shortio.test'`
+Run a single test: `npx vitest run --testPathPattern='shortio.test'`
 
 ## Architecture
 
@@ -41,4 +41,4 @@ Four source files in `src/`:
 - ESLint v9 config requires nullish coalescing (`??`) and optional chaining (`?.`)
 - Explicit return types on functions (warning level)
 - No `any` usage (warning level, relaxed in tests)
-- Tests mock browser APIs (fetch, crypto.subtle, sendBeacon, TextEncoder) since Jest runs in jsdom
+- Tests mock browser APIs (fetch, crypto.subtle, sendBeacon, TextEncoder) since Vitest runs in jsdom

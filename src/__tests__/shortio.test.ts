@@ -2,27 +2,27 @@ import { ShortioClient, createClient, createSecure } from '../shortio';
 import type { CreateLinkRequest, ExpandLinkRequest, ConversionTrackingOptions } from '../types';
 
 // Mock fetch globally
-global.fetch = jest.fn();
+global.fetch = vi.fn();
 
 // Mock navigator.sendBeacon
 Object.defineProperty(navigator, 'sendBeacon', {
   writable: true,
-  value: jest.fn()
+  value: vi.fn()
 });
 
 // Mock crypto.subtle for Node.js test environment
 const mockCrypto = {
   subtle: {
-    generateKey: jest.fn().mockResolvedValue({
+    generateKey: vi.fn().mockResolvedValue({
       algorithm: { name: 'AES-GCM', length: 128 },
       extractable: true,
       type: 'secret',
       usages: ['encrypt', 'decrypt']
     }),
-    encrypt: jest.fn().mockResolvedValue(new ArrayBuffer(32)),
-    exportKey: jest.fn().mockResolvedValue(new ArrayBuffer(16))
+    encrypt: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
+    exportKey: vi.fn().mockResolvedValue(new ArrayBuffer(16))
   },
-  getRandomValues: jest.fn().mockReturnValue(new Uint8Array(12))
+  getRandomValues: vi.fn().mockReturnValue(new Uint8Array(12))
 };
 
 Object.defineProperty(global, 'crypto', {
@@ -52,9 +52,9 @@ describe('ShortioClient', () => {
 
   beforeEach(() => {
     client = new ShortioClient(mockConfig);
-    (fetch as jest.Mock).mockClear();
-    (navigator.sendBeacon as jest.Mock).mockClear();
-    
+    vi.mocked(fetch).mockClear();
+    vi.mocked(navigator.sendBeacon).mockClear();
+
     // Mock window.location.search
     delete (window as any).location;
     (window as any).location = { search: '' };
@@ -73,10 +73,10 @@ describe('ShortioClient', () => {
         LinkId: 123
       };
 
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => mockResponse
-      });
+      } as Response);
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -102,10 +102,10 @@ describe('ShortioClient', () => {
     });
 
     it('should send all optional parameters', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({})
-      });
+      } as Response);
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -138,17 +138,17 @@ describe('ShortioClient', () => {
 
       await client.createLink(request);
 
-      const sentBody = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      const sentBody = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
       expect(sentBody).toEqual(request);
     });
 
     it('should handle API errors', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: false,
         status: 400,
         statusText: 'Bad Request',
         json: async () => ({ error: 'Invalid URL' })
-      });
+      } as Response);
 
       const request: CreateLinkRequest = {
         originalURL: 'invalid-url',
@@ -159,12 +159,12 @@ describe('ShortioClient', () => {
     });
 
     it('should prefer message over error in API error response', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: false,
         status: 422,
         statusText: 'Unprocessable Entity',
         json: async () => ({ error: 'validation_error', message: 'Domain is required' })
-      });
+      } as Response);
 
       await expect(client.createLink({
         originalURL: 'https://example.com',
@@ -173,7 +173,7 @@ describe('ShortioClient', () => {
     });
 
     it('should handle fetch rejection (network failure)', async () => {
-      (fetch as jest.Mock).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      vi.mocked(fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'));
 
       await expect(client.createLink({
         originalURL: 'https://example.com',
@@ -196,10 +196,10 @@ describe('ShortioClient', () => {
         clicks: 42
       };
 
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => mockResponse
-      });
+      } as Response);
 
       const request: ExpandLinkRequest = {
         domain: '9qr.de',
@@ -222,12 +222,12 @@ describe('ShortioClient', () => {
     });
 
     it('should handle network errors', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: false,
         status: 500,
         statusText: 'Internal Server Error',
         json: async () => { throw new Error('Parse error'); }
-      });
+      } as unknown as Response);
 
       const request: ExpandLinkRequest = {
         domain: '9qr.de',
@@ -252,37 +252,37 @@ describe('ShortioClient', () => {
         baseUrl: 'https://custom.api.url'
       });
 
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({})
-      });
+      } as Response);
 
       await customClient.createLink({
         originalURL: 'https://example.com',
         domain: '9qr.de'
       });
 
-      expect((fetch as jest.Mock).mock.calls[0][0]).toBe(
+      expect(vi.mocked(fetch).mock.calls[0][0]).toBe(
         'https://custom.api.url/links/public'
       );
     });
 
     it('should default base URL to https://api.short.io', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({})
-      });
+      } as Response);
 
       await client.expandLink({ domain: '9qr.de', path: 'test' });
 
-      expect((fetch as jest.Mock).mock.calls[0][0]).toContain('https://api.short.io/');
+      expect(vi.mocked(fetch).mock.calls[0][0]).toContain('https://api.short.io/');
     });
   });
 
   describe('trackConversion', () => {
     it('should track conversion successfully with clid in URL', () => {
       (window as any).location.search = '?clid=test-click-id';
-      (navigator.sendBeacon as jest.Mock).mockReturnValue(true);
+      vi.mocked(navigator.sendBeacon).mockReturnValue(true);
 
       const options: ConversionTrackingOptions = {
         domain: 'example.com',
@@ -304,7 +304,7 @@ describe('ShortioClient', () => {
 
     it('should track conversion without conversionId', () => {
       (window as any).location.search = '?clid=test-click-id';
-      (navigator.sendBeacon as jest.Mock).mockReturnValue(true);
+      vi.mocked(navigator.sendBeacon).mockReturnValue(true);
 
       const options: ConversionTrackingOptions = {
         domain: 'example.com'
@@ -341,7 +341,7 @@ describe('ShortioClient', () => {
 
     it('should handle errors gracefully', () => {
       (window as any).location.search = '?clid=test-click-id';
-      (navigator.sendBeacon as jest.Mock).mockImplementation(() => {
+      vi.mocked(navigator.sendBeacon).mockImplementation(() => {
         throw new Error('Network error');
       });
 
@@ -360,7 +360,7 @@ describe('ShortioClient', () => {
 
     it('should extract clid when URL has multiple query params', () => {
       (window as any).location.search = '?utm_source=twitter&clid=abc&ref=home';
-      (navigator.sendBeacon as jest.Mock).mockReturnValue(true);
+      vi.mocked(navigator.sendBeacon).mockReturnValue(true);
 
       const result = client.trackConversion({ domain: 'example.com' });
 
@@ -408,10 +408,10 @@ describe('ShortioClient', () => {
         hasPassword: true
       };
 
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => mockResponse
-      });
+      } as Response);
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -439,26 +439,26 @@ describe('ShortioClient', () => {
     });
 
     it('should not send original URL in plaintext', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ shortURL: 'https://9qr.de/x' })
-      });
+      } as Response);
 
       await client.createEncryptedLink({
         originalURL: 'https://secret.example.com',
         domain: '9qr.de'
       });
 
-      const sentBody = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      const sentBody = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
       expect(sentBody.originalURL).not.toBe('https://secret.example.com');
       expect(sentBody.originalURL).toMatch(/^shortsecure:\/\//);
     });
 
     it('should preserve other request fields in encrypted link', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ shortURL: 'https://9qr.de/x' })
-      });
+      } as Response);
 
       await client.createEncryptedLink({
         originalURL: 'https://example.com',
@@ -467,19 +467,19 @@ describe('ShortioClient', () => {
         tags: ['encrypted']
       });
 
-      const sentBody = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      const sentBody = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
       expect(sentBody.domain).toBe('9qr.de');
       expect(sentBody.title).toBe('My Title');
       expect(sentBody.tags).toEqual(['encrypted']);
     });
 
     it('should handle encrypted link creation errors', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
+      vi.mocked(fetch).mockResolvedValueOnce({
         ok: false,
         status: 400,
         statusText: 'Bad Request',
         json: async () => ({ error: 'Invalid password' })
-      });
+      } as Response);
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
