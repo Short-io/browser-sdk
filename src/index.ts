@@ -8,4 +8,6 @@ export type {
   ApiError,
   ConversionTrackingOptions,
   ConversionTrackingResult,
+  ObserveConversionsOptions,
+  ConversionObserver,
 } from './types';

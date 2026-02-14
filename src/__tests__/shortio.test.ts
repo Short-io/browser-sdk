@@ -473,6 +473,247 @@ describe('ShortioClient', () => {
     });
   });
 
+  describe('trackConversion with value', () => {
+    it('should append value as v param in beacon URL', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+
+      const result = client.trackConversion({
+        domain: 'example.com',
+        conversionId: 'purchase',
+        value: 49.99,
+      });
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        'https://example.com/.shortio/conversion?clid=test-click-id&c=purchase&v=49.99'
+      );
+      expect(result).toEqual({
+        success: true,
+        conversionId: 'purchase',
+        clid: 'test-click-id',
+        domain: 'example.com',
+        value: 49.99,
+      });
+    });
+
+    it('should send value without conversionId', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+
+      const result = client.trackConversion({
+        domain: 'example.com',
+        value: 10,
+      });
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        'https://example.com/.shortio/conversion?clid=test-click-id&v=10'
+      );
+      expect(result.value).toBe(10);
+    });
+
+    it('should not include v param when value is undefined', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+
+      client.trackConversion({ domain: 'example.com' });
+
+      const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(url).not.toContain('&v=');
+    });
+  });
+
+  describe('declarative conversion tracking', () => {
+    let observer: ReturnType<typeof client.observeConversions>;
+
+    afterEach(() => {
+      observer?.disconnect();
+      document.body.innerHTML = '';
+    });
+
+    it('should bind to <form> on submit', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const form = document.createElement('form');
+      form.setAttribute('data-shortio-conversion', 'signup');
+      document.body.appendChild(form);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      form.dispatchEvent(new Event('submit'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=signup')
+      );
+    });
+
+    it('should bind to <button> on click', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'cta');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=cta')
+      );
+    });
+
+    it('should bind to <a> on click', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const anchor = document.createElement('a');
+      anchor.setAttribute('data-shortio-conversion', 'link-click');
+      document.body.appendChild(anchor);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      anchor.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=link-click')
+      );
+    });
+
+    it('should bind to <input> on change', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.setAttribute('data-shortio-conversion', 'field-change');
+      document.body.appendChild(input);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      input.dispatchEvent(new Event('change'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=field-change')
+      );
+    });
+
+    it('should bind to <input type="submit"> on click', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const input = document.createElement('input');
+      input.type = 'submit';
+      input.setAttribute('data-shortio-conversion', 'form-submit');
+      document.body.appendChild(input);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      input.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=form-submit')
+      );
+    });
+
+    it('should read data-shortio-conversion-value and send as v param', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'purchase');
+      button.setAttribute('data-shortio-conversion-value', '29.99');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('v=29.99')
+      );
+    });
+
+    it('should ignore invalid/NaN value attributes', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'purchase');
+      button.setAttribute('data-shortio-conversion-value', 'not-a-number');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(url).not.toContain('&v=');
+    });
+
+    it('should treat empty data-shortio-conversion as undefined conversionId', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', '');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(url).not.toContain('&c=');
+    });
+
+    it('should pick up dynamically added elements via MutationObserver', async () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      observer = client.observeConversions({ domain: 'example.com' });
+
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'dynamic');
+      document.body.appendChild(button);
+
+      // Wait for MutationObserver to process
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=dynamic')
+      );
+    });
+
+    it('should pick up descendants of dynamically added elements', async () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      observer = client.observeConversions({ domain: 'example.com' });
+
+      const wrapper = document.createElement('div');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'nested');
+      wrapper.appendChild(button);
+      document.body.appendChild(wrapper);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=nested')
+      );
+    });
+
+    it('should remove all listeners and stop observing on disconnect()', async () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'cta');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      observer.disconnect();
+
+      button.dispatchEvent(new Event('click'));
+      expect(navigator.sendBeacon).not.toHaveBeenCalled();
+
+      // Dynamically added elements should not be bound after disconnect
+      const newButton = document.createElement('button');
+      newButton.setAttribute('data-shortio-conversion', 'new');
+      document.body.appendChild(newButton);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      newButton.dispatchEvent(new Event('click'));
+      expect(navigator.sendBeacon).not.toHaveBeenCalled();
+    });
+
+    it('should work without clid in URL (conversion returns failure)', () => {
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'cta');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      // sendBeacon should not be called since trackConversion returns early without clid
+      expect(navigator.sendBeacon).not.toHaveBeenCalled();
+    });
+  });
+
   describe('createSecure', () => {
     it('should return securedOriginalURL with shortsecure:// protocol', async () => {
       const result = await createSecure('https://example.com');

@@ -94,6 +94,7 @@ export interface ApiError {
 export interface ConversionTrackingOptions {
   conversionId?: string;
   domain: string;
+  value?: number;
 }
 
 export interface ConversionTrackingResult {
@@ -101,4 +102,13 @@ export interface ConversionTrackingResult {
   conversionId?: string;
   clid?: string;
   domain: string;
+  value?: number;
+}
+
+export interface ObserveConversionsOptions {
+  domain: string;
+}
+
+export interface ConversionObserver {
+  disconnect(): void;
 }

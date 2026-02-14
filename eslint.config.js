@@ -55,7 +55,12 @@ export default [
         window: 'readonly',
         navigator: 'readonly',
         crypto: 'readonly',
-        history: 'readonly'
+        history: 'readonly',
+        document: 'readonly',
+        setTimeout: 'readonly',
+        Node: 'readonly',
+        Event: 'readonly',
+        HTMLInputElement: 'readonly'
       }
     },
     plugins: {

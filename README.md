@@ -111,6 +111,7 @@ Tracks a conversion event using `navigator.sendBeacon()`. Reads the `clid` (clic
 |-----------|------|----------|-------------|
 | `domain` | `string` | Yes | Your Short.io domain |
 | `conversionId` | `string` | No | Custom conversion identifier |
+| `value` | `number` | No | Monetary or numeric value for the conversion |
 
 Returns `ConversionTrackingResult`:
 
@@ -120,13 +121,15 @@ Returns `ConversionTrackingResult`:
   conversionId?: string;
   clid?: string;
   domain: string;
+  value?: number;
 }
 ```
 
 ```typescript
 const result = client.trackConversion({
   domain: 'your-domain.com',
-  conversionId: 'signup'
+  conversionId: 'purchase',
+  value: 49.99
 });
 
 if (result.success) {
@@ -140,6 +143,45 @@ Returns the `clid` query parameter from the current page URL, or `null` if not p
 
 ```typescript
 const clickId = client.getClickId();
+```
+
+### `client.observeConversions(options)`
+
+Enables declarative conversion tracking via HTML `data-` attributes. Scans the DOM for elements with `data-shortio-conversion` and automatically binds event listeners. Also watches for dynamically added elements using a `MutationObserver`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `domain` | `string` | Yes | Your Short.io domain |
+
+Returns a `ConversionObserver` with a `disconnect()` method to remove all listeners and stop observing.
+
+**HTML attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `data-shortio-conversion` | Conversion identifier (empty string for no ID) |
+| `data-shortio-conversion-value` | Numeric value for the conversion (ignored if not a valid number) |
+
+**Event binding by element type:**
+
+| Element | Event |
+|---------|-------|
+| `<form>` | `submit` |
+| `<input>` (non-submit) | `change` |
+| `<button>`, `<a>`, `<input type="submit">` | `click` |
+
+```html
+<!-- Declarative conversion tracking -->
+<form data-shortio-conversion="signup">...</form>
+<button data-shortio-conversion="purchase" data-shortio-conversion-value="29.99">Buy Now</button>
+<a href="/pricing" data-shortio-conversion="cta-click">View Pricing</a>
+```
+
+```typescript
+const observer = client.observeConversions({ domain: 'your-domain.com' });
+
+// Later, to stop tracking:
+observer.disconnect();
 ```
 
 ## Bundle Formats
@@ -174,6 +216,8 @@ import type {
   ExpandLinkResponse,
   ConversionTrackingOptions,
   ConversionTrackingResult,
+  ObserveConversionsOptions,
+  ConversionObserver,
   ApiError
 } from '@short.io/client-browser';
 ```
@@ -207,6 +251,7 @@ Requires browsers supporting:
 - [Fetch API](https://caniuse.com/fetch)
 - [Web Crypto API](https://caniuse.com/cryptography) (for encrypted links)
 - [Beacon API](https://caniuse.com/beacon) (for conversion tracking)
+- [MutationObserver](https://caniuse.com/mutationobserver) (for declarative conversion tracking)
 
 ## License
 
