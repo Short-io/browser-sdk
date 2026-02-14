@@ -45,15 +45,17 @@ export default [
         describe: 'readonly',
         it: 'readonly',
         expect: 'readonly',
+        beforeAll: 'readonly',
         beforeEach: 'readonly',
+        afterAll: 'readonly',
         afterEach: 'readonly',
         vi: 'readonly',
         RequestInit: 'readonly',
         fetch: 'readonly',
-        global: 'readonly',
         window: 'readonly',
         navigator: 'readonly',
-        Buffer: 'readonly'
+        crypto: 'readonly',
+        history: 'readonly'
       }
     },
     plugins: {

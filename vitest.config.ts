@@ -2,12 +2,13 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    environment: 'jsdom',
     globals: true,
     root: './src',
-    coverage: {
-      include: ['**/*.ts'],
-      exclude: ['**/*.d.ts', 'index.ts'],
+    browser: {
+      enabled: true,
+      provider: 'playwright',
+      headless: true,
+      instances: [{ browser: 'chromium' }],
     },
   },
 });

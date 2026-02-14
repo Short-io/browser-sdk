@@ -1,48 +1,17 @@
 import { ShortioClient, createClient, createSecure } from '../shortio';
 import type { CreateLinkRequest, ExpandLinkRequest, ConversionTrackingOptions } from '../types';
+import { http, HttpResponse } from 'msw';
+import { setupWorker } from 'msw/browser';
 
-// Mock fetch globally
-global.fetch = vi.fn();
+const worker = setupWorker();
 
-// Mock navigator.sendBeacon
-Object.defineProperty(navigator, 'sendBeacon', {
-  writable: true,
-  value: vi.fn()
-});
-
-// Mock crypto.subtle for Node.js test environment
-const mockCrypto = {
-  subtle: {
-    generateKey: vi.fn().mockResolvedValue({
-      algorithm: { name: 'AES-GCM', length: 128 },
-      extractable: true,
-      type: 'secret',
-      usages: ['encrypt', 'decrypt']
-    }),
-    encrypt: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
-    exportKey: vi.fn().mockResolvedValue(new ArrayBuffer(16))
-  },
-  getRandomValues: vi.fn().mockReturnValue(new Uint8Array(12))
-};
-
-Object.defineProperty(global, 'crypto', {
-  value: mockCrypto,
-  writable: true
-});
-
-// Mock TextEncoder
-Object.defineProperty(global, 'TextEncoder', {
-  value: class TextEncoder {
-    encoding = 'utf-8';
-    encode(input: string): Uint8Array {
-      return new Uint8Array(Buffer.from(input, 'utf8'));
-    }
-    encodeInto() {
-      throw new Error('encodeInto not implemented in mock');
-    }
-  },
-  writable: true
-});
+// Mock crypto key for deterministic output
+const mockCryptoKey = {
+  algorithm: { name: 'AES-GCM', length: 128 },
+  extractable: true,
+  type: 'secret',
+  usages: ['encrypt', 'decrypt']
+} as unknown as CryptoKey;
 
 describe('ShortioClient', () => {
   let client: ShortioClient;
@@ -50,14 +19,33 @@ describe('ShortioClient', () => {
     publicKey: 'test-public-key'
   };
 
+  beforeAll(async () => {
+    await worker.start({ quiet: true, onUnhandledRequest: 'bypass' });
+  });
+
+  afterAll(() => {
+    worker.stop();
+  });
+
   beforeEach(() => {
     client = new ShortioClient(mockConfig);
-    vi.mocked(fetch).mockClear();
-    vi.mocked(navigator.sendBeacon).mockClear();
 
-    // Mock window.location.search
-    delete (window as any).location;
-    (window as any).location = { search: '' };
+    // Mock crypto.subtle methods for deterministic output
+    vi.spyOn(crypto.subtle, 'generateKey').mockResolvedValue(mockCryptoKey);
+    vi.spyOn(crypto.subtle, 'encrypt').mockResolvedValue(new ArrayBuffer(32));
+    vi.spyOn(crypto.subtle, 'exportKey').mockResolvedValue(new ArrayBuffer(16));
+    vi.spyOn(crypto, 'getRandomValues').mockReturnValue(new Uint8Array(12));
+
+    // Mock sendBeacon
+    vi.spyOn(navigator, 'sendBeacon').mockReturnValue(true);
+
+    // Reset URL to clean state
+    history.replaceState({}, '', window.location.pathname);
+  });
+
+  afterEach(() => {
+    worker.resetHandlers();
+    vi.restoreAllMocks();
   });
 
   describe('createLink', () => {
@@ -73,10 +61,13 @@ describe('ShortioClient', () => {
         LinkId: 123
       };
 
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockResponse
-      } as Response);
+      let capturedRequest: Request | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedRequest = request.clone();
+          return HttpResponse.json(mockResponse);
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -86,26 +77,22 @@ describe('ShortioClient', () => {
 
       const result = await client.createLink(request);
 
-      expect(fetch).toHaveBeenCalledWith(
-        'https://api.short.io/links/public',
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': 'test-public-key',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(request)
-        }
-      );
-
+      expect(capturedRequest).not.toBeNull();
+      expect(capturedRequest!.headers.get('Authorization')).toBe('test-public-key');
+      expect(capturedRequest!.headers.get('Content-Type')).toBe('application/json');
+      const body = await capturedRequest!.json();
+      expect(body).toEqual(request);
       expect(result).toEqual(mockResponse);
     });
 
     it('should send all optional parameters', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({})
-      } as Response);
+      let capturedBody: unknown = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json();
+          return HttpResponse.json({});
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -138,17 +125,15 @@ describe('ShortioClient', () => {
 
       await client.createLink(request);
 
-      const sentBody = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
-      expect(sentBody).toEqual(request);
+      expect(capturedBody).toEqual(request);
     });
 
     it('should handle API errors', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: 'Bad Request',
-        json: async () => ({ error: 'Invalid URL' })
-      } as Response);
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.json({ error: 'Invalid URL' }, { status: 400 });
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'invalid-url',
@@ -159,12 +144,14 @@ describe('ShortioClient', () => {
     });
 
     it('should prefer message over error in API error response', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 422,
-        statusText: 'Unprocessable Entity',
-        json: async () => ({ error: 'validation_error', message: 'Domain is required' })
-      } as Response);
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.json(
+            { error: 'validation_error', message: 'Domain is required' },
+            { status: 422 }
+          );
+        })
+      );
 
       await expect(client.createLink({
         originalURL: 'https://example.com',
@@ -173,7 +160,11 @@ describe('ShortioClient', () => {
     });
 
     it('should handle fetch rejection (network failure)', async () => {
-      vi.mocked(fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.error();
+        })
+      );
 
       await expect(client.createLink({
         originalURL: 'https://example.com',
@@ -196,10 +187,13 @@ describe('ShortioClient', () => {
         clicks: 42
       };
 
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockResponse
-      } as Response);
+      let capturedRequest: Request | null = null;
+      worker.use(
+        http.get('https://api.short.io/links/expand', async ({ request }) => {
+          capturedRequest = request.clone();
+          return HttpResponse.json(mockResponse);
+        })
+      );
 
       const request: ExpandLinkRequest = {
         domain: '9qr.de',
@@ -208,26 +202,22 @@ describe('ShortioClient', () => {
 
       const result = await client.expandLink(request);
 
-      expect(fetch).toHaveBeenCalledWith(
-        'https://api.short.io/links/expand?domain=9qr.de&path=abc123',
-        {
-          headers: {
-            'Authorization': 'test-public-key',
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
+      const url = new URL(capturedRequest!.url);
+      expect(url.searchParams.get('domain')).toBe('9qr.de');
+      expect(url.searchParams.get('path')).toBe('abc123');
+      expect(capturedRequest!.headers.get('Authorization')).toBe('test-public-key');
       expect(result).toEqual(mockResponse);
     });
 
     it('should handle network errors', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        json: async () => { throw new Error('Parse error'); }
-      } as unknown as Response);
+      worker.use(
+        http.get('https://api.short.io/links/expand', () => {
+          return new HttpResponse('Server Error', {
+            status: 500,
+            statusText: 'Internal Server Error'
+          });
+        })
+      );
 
       const request: ExpandLinkRequest = {
         domain: '9qr.de',
@@ -240,8 +230,8 @@ describe('ShortioClient', () => {
 
   describe('createClient', () => {
     it('should create a client instance', () => {
-      const client = createClient(mockConfig);
-      expect(client).toBeInstanceOf(ShortioClient);
+      const instance = createClient(mockConfig);
+      expect(instance).toBeInstanceOf(ShortioClient);
     });
   });
 
@@ -252,37 +242,40 @@ describe('ShortioClient', () => {
         baseUrl: 'https://custom.api.url'
       });
 
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({})
-      } as Response);
+      let capturedUrl = '';
+      worker.use(
+        http.post('https://custom.api.url/links/public', async ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json({});
+        })
+      );
 
       await customClient.createLink({
         originalURL: 'https://example.com',
         domain: '9qr.de'
       });
 
-      expect(vi.mocked(fetch).mock.calls[0][0]).toBe(
-        'https://custom.api.url/links/public'
-      );
+      expect(capturedUrl).toBe('https://custom.api.url/links/public');
     });
 
     it('should default base URL to https://api.short.io', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({})
-      } as Response);
+      let capturedUrl = '';
+      worker.use(
+        http.get('https://api.short.io/links/expand', async ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json({});
+        })
+      );
 
       await client.expandLink({ domain: '9qr.de', path: 'test' });
 
-      expect(vi.mocked(fetch).mock.calls[0][0]).toContain('https://api.short.io/');
+      expect(capturedUrl).toContain('https://api.short.io/');
     });
   });
 
   describe('trackConversion', () => {
     it('should track conversion successfully with clid in URL', () => {
-      (window as any).location.search = '?clid=test-click-id';
-      vi.mocked(navigator.sendBeacon).mockReturnValue(true);
+      history.replaceState({}, '', '?clid=test-click-id');
 
       const options: ConversionTrackingOptions = {
         domain: 'example.com',
@@ -303,8 +296,7 @@ describe('ShortioClient', () => {
     });
 
     it('should track conversion without conversionId', () => {
-      (window as any).location.search = '?clid=test-click-id';
-      vi.mocked(navigator.sendBeacon).mockReturnValue(true);
+      history.replaceState({}, '', '?clid=test-click-id');
 
       const options: ConversionTrackingOptions = {
         domain: 'example.com'
@@ -323,8 +315,6 @@ describe('ShortioClient', () => {
     });
 
     it('should return failure when no clid in URL', () => {
-      (window as any).location.search = '';
-
       const options: ConversionTrackingOptions = {
         domain: 'example.com',
         conversionId: 'purchase'
@@ -340,8 +330,8 @@ describe('ShortioClient', () => {
     });
 
     it('should handle errors gracefully', () => {
-      (window as any).location.search = '?clid=test-click-id';
-      vi.mocked(navigator.sendBeacon).mockImplementation(() => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      vi.spyOn(navigator, 'sendBeacon').mockImplementation(() => {
         throw new Error('Network error');
       });
 
@@ -359,8 +349,7 @@ describe('ShortioClient', () => {
     });
 
     it('should extract clid when URL has multiple query params', () => {
-      (window as any).location.search = '?utm_source=twitter&clid=abc&ref=home';
-      vi.mocked(navigator.sendBeacon).mockReturnValue(true);
+      history.replaceState({}, '', '?utm_source=twitter&clid=abc&ref=home');
 
       const result = client.trackConversion({ domain: 'example.com' });
 
@@ -371,7 +360,7 @@ describe('ShortioClient', () => {
 
   describe('getClickId', () => {
     it('should return clid from URL params', () => {
-      (window as any).location.search = '?clid=test-click-id&other=param';
+      history.replaceState({}, '', '?clid=test-click-id&other=param');
 
       const result = client.getClickId();
 
@@ -379,7 +368,7 @@ describe('ShortioClient', () => {
     });
 
     it('should return null when no clid in URL', () => {
-      (window as any).location.search = '?other=param';
+      history.replaceState({}, '', '?other=param');
 
       const result = client.getClickId();
 
@@ -387,8 +376,6 @@ describe('ShortioClient', () => {
     });
 
     it('should return null when search string is empty', () => {
-      (window as any).location.search = '';
-
       expect(client.getClickId()).toBeNull();
     });
   });
@@ -408,10 +395,13 @@ describe('ShortioClient', () => {
         hasPassword: true
       };
 
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockResponse
-      } as Response);
+      let capturedBody: Record<string, unknown> | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>;
+          return HttpResponse.json(mockResponse);
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -422,43 +412,37 @@ describe('ShortioClient', () => {
 
       const result = await client.createEncryptedLink(request);
 
-      expect(fetch).toHaveBeenCalledWith(
-        'https://api.short.io/links/public',
-        expect.objectContaining({
-          method: 'POST',
-          headers: {
-            'Authorization': 'test-public-key',
-            'Content-Type': 'application/json'
-          },
-          body: expect.stringContaining('shortsecure://')
-        })
-      );
-
+      expect(capturedBody!.originalURL).toMatch(/^shortsecure:\/\//);
       expect(result.shortURL).toMatch(/^https:\/\/9qr\.de\/abc123#/);
       expect(result.originalURL).toBe(mockResponse.originalURL);
     });
 
     it('should not send original URL in plaintext', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ shortURL: 'https://9qr.de/x' })
-      } as Response);
+      let capturedBody: Record<string, unknown> | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>;
+          return HttpResponse.json({ shortURL: 'https://9qr.de/x' });
+        })
+      );
 
       await client.createEncryptedLink({
         originalURL: 'https://secret.example.com',
         domain: '9qr.de'
       });
 
-      const sentBody = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
-      expect(sentBody.originalURL).not.toBe('https://secret.example.com');
-      expect(sentBody.originalURL).toMatch(/^shortsecure:\/\//);
+      expect(capturedBody!.originalURL).not.toBe('https://secret.example.com');
+      expect(capturedBody!.originalURL).toMatch(/^shortsecure:\/\//);
     });
 
     it('should preserve other request fields in encrypted link', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ shortURL: 'https://9qr.de/x' })
-      } as Response);
+      let capturedBody: Record<string, unknown> | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>;
+          return HttpResponse.json({ shortURL: 'https://9qr.de/x' });
+        })
+      );
 
       await client.createEncryptedLink({
         originalURL: 'https://example.com',
@@ -467,19 +451,17 @@ describe('ShortioClient', () => {
         tags: ['encrypted']
       });
 
-      const sentBody = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
-      expect(sentBody.domain).toBe('9qr.de');
-      expect(sentBody.title).toBe('My Title');
-      expect(sentBody.tags).toEqual(['encrypted']);
+      expect(capturedBody!.domain).toBe('9qr.de');
+      expect(capturedBody!.title).toBe('My Title');
+      expect(capturedBody!.tags).toEqual(['encrypted']);
     });
 
     it('should handle encrypted link creation errors', async () => {
-      vi.mocked(fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: 'Bad Request',
-        json: async () => ({ error: 'Invalid password' })
-      } as Response);
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.json({ error: 'Invalid password' }, { status: 400 });
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -507,7 +489,7 @@ describe('ShortioClient', () => {
     it('should call crypto.subtle.generateKey with AES-GCM', async () => {
       await createSecure('https://example.com');
 
-      expect(mockCrypto.subtle.generateKey).toHaveBeenCalledWith(
+      expect(crypto.subtle.generateKey).toHaveBeenCalledWith(
         { name: 'AES-GCM', length: 128 },
         true,
         ['encrypt', 'decrypt']
@@ -515,7 +497,7 @@ describe('ShortioClient', () => {
     });
 
     it('should propagate crypto errors', async () => {
-      mockCrypto.subtle.generateKey.mockRejectedValueOnce(new Error('Crypto not available'));
+      vi.spyOn(crypto.subtle, 'generateKey').mockRejectedValueOnce(new Error('Crypto not available'));
 
       await expect(createSecure('https://example.com')).rejects.toThrow('Crypto not available');
     });
