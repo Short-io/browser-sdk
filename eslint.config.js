@@ -45,15 +45,22 @@ export default [
         describe: 'readonly',
         it: 'readonly',
         expect: 'readonly',
+        beforeAll: 'readonly',
         beforeEach: 'readonly',
+        afterAll: 'readonly',
         afterEach: 'readonly',
-        jest: 'readonly',
+        vi: 'readonly',
         RequestInit: 'readonly',
         fetch: 'readonly',
-        global: 'readonly',
         window: 'readonly',
         navigator: 'readonly',
-        Buffer: 'readonly'
+        crypto: 'readonly',
+        history: 'readonly',
+        document: 'readonly',
+        setTimeout: 'readonly',
+        Node: 'readonly',
+        Event: 'readonly',
+        HTMLInputElement: 'readonly'
       }
     },
     plugins: {

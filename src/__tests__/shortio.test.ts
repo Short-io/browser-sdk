@@ -1,48 +1,17 @@
-import { ShortioClient, createClient } from '../shortio';
+import { ShortioClient, createClient, createSecure } from '../shortio';
 import type { CreateLinkRequest, ExpandLinkRequest, ConversionTrackingOptions } from '../types';
+import { http, HttpResponse } from 'msw';
+import { setupWorker } from 'msw/browser';
 
-// Mock fetch globally
-global.fetch = jest.fn();
+const worker = setupWorker();
 
-// Mock navigator.sendBeacon
-Object.defineProperty(navigator, 'sendBeacon', {
-  writable: true,
-  value: jest.fn()
-});
-
-// Mock crypto.subtle for Node.js test environment
-const mockCrypto = {
-  subtle: {
-    generateKey: jest.fn().mockResolvedValue({
-      algorithm: { name: 'AES-GCM', length: 128 },
-      extractable: true,
-      type: 'secret',
-      usages: ['encrypt', 'decrypt']
-    }),
-    encrypt: jest.fn().mockResolvedValue(new ArrayBuffer(32)),
-    exportKey: jest.fn().mockResolvedValue(new ArrayBuffer(16))
-  },
-  getRandomValues: jest.fn().mockReturnValue(new Uint8Array(12))
-};
-
-Object.defineProperty(global, 'crypto', {
-  value: mockCrypto,
-  writable: true
-});
-
-// Mock TextEncoder
-Object.defineProperty(global, 'TextEncoder', {
-  value: class TextEncoder {
-    encoding = 'utf-8';
-    encode(input: string): Uint8Array {
-      return new Uint8Array(Buffer.from(input, 'utf8'));
-    }
-    encodeInto() {
-      throw new Error('encodeInto not implemented in mock');
-    }
-  },
-  writable: true
-});
+// Mock crypto key for deterministic output
+const mockCryptoKey = {
+  algorithm: { name: 'AES-GCM', length: 128 },
+  extractable: true,
+  type: 'secret',
+  usages: ['encrypt', 'decrypt']
+} as unknown as CryptoKey;
 
 describe('ShortioClient', () => {
   let client: ShortioClient;
@@ -50,14 +19,33 @@ describe('ShortioClient', () => {
     publicKey: 'test-public-key'
   };
 
+  beforeAll(async () => {
+    await worker.start({ quiet: true, onUnhandledRequest: 'bypass' });
+  });
+
+  afterAll(() => {
+    worker.stop();
+  });
+
   beforeEach(() => {
     client = new ShortioClient(mockConfig);
-    (fetch as jest.Mock).mockClear();
-    (navigator.sendBeacon as jest.Mock).mockClear();
-    
-    // Mock window.location.search
-    delete (window as any).location;
-    (window as any).location = { search: '' };
+
+    // Mock crypto.subtle methods for deterministic output
+    vi.spyOn(crypto.subtle, 'generateKey').mockResolvedValue(mockCryptoKey);
+    vi.spyOn(crypto.subtle, 'encrypt').mockResolvedValue(new ArrayBuffer(32));
+    vi.spyOn(crypto.subtle, 'exportKey').mockResolvedValue(new ArrayBuffer(16));
+    vi.spyOn(crypto, 'getRandomValues').mockReturnValue(new Uint8Array(12));
+
+    // Mock sendBeacon
+    vi.spyOn(navigator, 'sendBeacon').mockReturnValue(true);
+
+    // Reset URL to clean state
+    history.replaceState({}, '', window.location.pathname);
+  });
+
+  afterEach(() => {
+    worker.resetHandlers();
+    vi.restoreAllMocks();
   });
 
   describe('createLink', () => {
@@ -73,10 +61,13 @@ describe('ShortioClient', () => {
         LinkId: 123
       };
 
-      (fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockResponse
-      });
+      let capturedRequest: Request | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedRequest = request.clone();
+          return HttpResponse.json(mockResponse);
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -86,28 +77,63 @@ describe('ShortioClient', () => {
 
       const result = await client.createLink(request);
 
-      expect(fetch).toHaveBeenCalledWith(
-        'https://api.short.io/links/public',
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': 'test-public-key',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(request)
-        }
-      );
-
+      expect(capturedRequest).not.toBeNull();
+      expect(capturedRequest!.headers.get('Authorization')).toBe('test-public-key');
+      expect(capturedRequest!.headers.get('Content-Type')).toBe('application/json');
+      const body = await capturedRequest!.json();
+      expect(body).toEqual(request);
       expect(result).toEqual(mockResponse);
     });
 
+    it('should send all optional parameters', async () => {
+      let capturedBody: unknown = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json();
+          return HttpResponse.json({});
+        })
+      );
+
+      const request: CreateLinkRequest = {
+        originalURL: 'https://example.com',
+        domain: '9qr.de',
+        path: 'custom',
+        title: 'Title',
+        tags: ['tag1', 'tag2'],
+        folderId: 'folder-1',
+        cloaking: true,
+        password: 'secret',
+        passwordContact: true,
+        redirectType: 301,
+        utmSource: 'twitter',
+        utmMedium: 'social',
+        utmCampaign: 'launch',
+        utmContent: 'cta',
+        utmTerm: 'sdk',
+        androidURL: 'https://play.google.com/app',
+        iphoneURL: 'https://apps.apple.com/app',
+        clicksLimit: 100,
+        skipQS: true,
+        archived: false,
+        splitURL: 'https://example.com/b',
+        splitPercent: 50,
+        integrationGA: 'UA-123',
+        integrationGTM: 'GTM-123',
+        integrationFB: 'fb-pixel',
+        integrationAdroll: 'adroll-id',
+      };
+
+      await client.createLink(request);
+
+      expect(capturedBody).toEqual(request);
+    });
+
     it('should handle API errors', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: 'Bad Request',
-        json: async () => ({ error: 'Invalid URL' })
-      });
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.json({ error: 'Invalid URL' }, { status: 400 });
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'invalid-url',
@@ -115,6 +141,35 @@ describe('ShortioClient', () => {
       };
 
       await expect(client.createLink(request)).rejects.toThrow('Invalid URL');
+    });
+
+    it('should prefer message over error in API error response', async () => {
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.json(
+            { error: 'validation_error', message: 'Domain is required' },
+            { status: 422 }
+          );
+        })
+      );
+
+      await expect(client.createLink({
+        originalURL: 'https://example.com',
+        domain: ''
+      })).rejects.toThrow('Domain is required');
+    });
+
+    it('should handle fetch rejection (network failure)', async () => {
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.error();
+        })
+      );
+
+      await expect(client.createLink({
+        originalURL: 'https://example.com',
+        domain: '9qr.de'
+      })).rejects.toThrow('Failed to fetch');
     });
   });
 
@@ -132,10 +187,13 @@ describe('ShortioClient', () => {
         clicks: 42
       };
 
-      (fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockResponse
-      });
+      let capturedRequest: Request | null = null;
+      worker.use(
+        http.get('https://api.short.io/links/expand', async ({ request }) => {
+          capturedRequest = request.clone();
+          return HttpResponse.json(mockResponse);
+        })
+      );
 
       const request: ExpandLinkRequest = {
         domain: '9qr.de',
@@ -144,26 +202,22 @@ describe('ShortioClient', () => {
 
       const result = await client.expandLink(request);
 
-      expect(fetch).toHaveBeenCalledWith(
-        'https://api.short.io/links/expand?domain=9qr.de&path=abc123',
-        {
-          headers: {
-            'Authorization': 'test-public-key',
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-
+      const url = new URL(capturedRequest!.url);
+      expect(url.searchParams.get('domain')).toBe('9qr.de');
+      expect(url.searchParams.get('path')).toBe('abc123');
+      expect(capturedRequest!.headers.get('Authorization')).toBe('test-public-key');
       expect(result).toEqual(mockResponse);
     });
 
     it('should handle network errors', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Server Error',
-        json: async () => { throw new Error('Parse error'); }
-      });
+      worker.use(
+        http.get('https://api.short.io/links/expand', () => {
+          return new HttpResponse('Server Error', {
+            status: 500,
+            statusText: 'Internal Server Error'
+          });
+        })
+      );
 
       const request: ExpandLinkRequest = {
         domain: '9qr.de',
@@ -176,26 +230,52 @@ describe('ShortioClient', () => {
 
   describe('createClient', () => {
     it('should create a client instance', () => {
-      const client = createClient(mockConfig);
-      expect(client).toBeInstanceOf(ShortioClient);
+      const instance = createClient(mockConfig);
+      expect(instance).toBeInstanceOf(ShortioClient);
     });
   });
 
   describe('configuration', () => {
-    it('should use custom base URL', () => {
+    it('should use custom base URL', async () => {
       const customClient = new ShortioClient({
         publicKey: 'test-key',
         baseUrl: 'https://custom.api.url'
       });
 
-      expect(customClient).toBeInstanceOf(ShortioClient);
+      let capturedUrl = '';
+      worker.use(
+        http.post('https://custom.api.url/links/public', async ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json({});
+        })
+      );
+
+      await customClient.createLink({
+        originalURL: 'https://example.com',
+        domain: '9qr.de'
+      });
+
+      expect(capturedUrl).toBe('https://custom.api.url/links/public');
+    });
+
+    it('should default base URL to https://api.short.io', async () => {
+      let capturedUrl = '';
+      worker.use(
+        http.get('https://api.short.io/links/expand', async ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json({});
+        })
+      );
+
+      await client.expandLink({ domain: '9qr.de', path: 'test' });
+
+      expect(capturedUrl).toContain('https://api.short.io/');
     });
   });
 
   describe('trackConversion', () => {
     it('should track conversion successfully with clid in URL', () => {
-      (window as any).location.search = '?clid=test-click-id';
-      (navigator.sendBeacon as jest.Mock).mockReturnValue(true);
+      history.replaceState({}, '', '?clid=test-click-id');
 
       const options: ConversionTrackingOptions = {
         domain: 'example.com',
@@ -216,8 +296,7 @@ describe('ShortioClient', () => {
     });
 
     it('should track conversion without conversionId', () => {
-      (window as any).location.search = '?clid=test-click-id';
-      (navigator.sendBeacon as jest.Mock).mockReturnValue(true);
+      history.replaceState({}, '', '?clid=test-click-id');
 
       const options: ConversionTrackingOptions = {
         domain: 'example.com'
@@ -236,8 +315,6 @@ describe('ShortioClient', () => {
     });
 
     it('should return failure when no clid in URL', () => {
-      (window as any).location.search = '';
-
       const options: ConversionTrackingOptions = {
         domain: 'example.com',
         conversionId: 'purchase'
@@ -253,8 +330,8 @@ describe('ShortioClient', () => {
     });
 
     it('should handle errors gracefully', () => {
-      (window as any).location.search = '?clid=test-click-id';
-      (navigator.sendBeacon as jest.Mock).mockImplementation(() => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      vi.spyOn(navigator, 'sendBeacon').mockImplementation(() => {
         throw new Error('Network error');
       });
 
@@ -270,23 +347,36 @@ describe('ShortioClient', () => {
         domain: 'example.com'
       });
     });
+
+    it('should extract clid when URL has multiple query params', () => {
+      history.replaceState({}, '', '?utm_source=twitter&clid=abc&ref=home');
+
+      const result = client.trackConversion({ domain: 'example.com' });
+
+      expect(result.success).toBe(true);
+      expect(result.clid).toBe('abc');
+    });
   });
 
   describe('getClickId', () => {
     it('should return clid from URL params', () => {
-      (window as any).location.search = '?clid=test-click-id&other=param';
-      
+      history.replaceState({}, '', '?clid=test-click-id&other=param');
+
       const result = client.getClickId();
-      
+
       expect(result).toBe('test-click-id');
     });
 
     it('should return null when no clid in URL', () => {
-      (window as any).location.search = '?other=param';
-      
+      history.replaceState({}, '', '?other=param');
+
       const result = client.getClickId();
-      
+
       expect(result).toBeNull();
+    });
+
+    it('should return null when search string is empty', () => {
+      expect(client.getClickId()).toBeNull();
     });
   });
 
@@ -305,10 +395,13 @@ describe('ShortioClient', () => {
         hasPassword: true
       };
 
-      (fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => mockResponse
-      });
+      let capturedBody: Record<string, unknown> | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>;
+          return HttpResponse.json(mockResponse);
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -319,29 +412,56 @@ describe('ShortioClient', () => {
 
       const result = await client.createEncryptedLink(request);
 
-      expect(fetch).toHaveBeenCalledWith(
-        'https://api.short.io/links/public',
-        expect.objectContaining({
-          method: 'POST',
-          headers: {
-            'Authorization': 'test-public-key',
-            'Content-Type': 'application/json'
-          },
-          body: expect.stringContaining('shortsecure://')
-        })
-      );
-
+      expect(capturedBody!.originalURL).toMatch(/^shortsecure:\/\//);
       expect(result.shortURL).toMatch(/^https:\/\/9qr\.de\/abc123#/);
       expect(result.originalURL).toBe(mockResponse.originalURL);
     });
 
-    it('should handle encrypted link creation errors', async () => {
-      (fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        statusText: 'Bad Request',
-        json: async () => ({ error: 'Invalid password' })
+    it('should not send original URL in plaintext', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>;
+          return HttpResponse.json({ shortURL: 'https://9qr.de/x' });
+        })
+      );
+
+      await client.createEncryptedLink({
+        originalURL: 'https://secret.example.com',
+        domain: '9qr.de'
       });
+
+      expect(capturedBody!.originalURL).not.toBe('https://secret.example.com');
+      expect(capturedBody!.originalURL).toMatch(/^shortsecure:\/\//);
+    });
+
+    it('should preserve other request fields in encrypted link', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+      worker.use(
+        http.post('https://api.short.io/links/public', async ({ request }) => {
+          capturedBody = await request.json() as Record<string, unknown>;
+          return HttpResponse.json({ shortURL: 'https://9qr.de/x' });
+        })
+      );
+
+      await client.createEncryptedLink({
+        originalURL: 'https://example.com',
+        domain: '9qr.de',
+        title: 'My Title',
+        tags: ['encrypted']
+      });
+
+      expect(capturedBody!.domain).toBe('9qr.de');
+      expect(capturedBody!.title).toBe('My Title');
+      expect(capturedBody!.tags).toEqual(['encrypted']);
+    });
+
+    it('should handle encrypted link creation errors', async () => {
+      worker.use(
+        http.post('https://api.short.io/links/public', () => {
+          return HttpResponse.json({ error: 'Invalid password' }, { status: 400 });
+        })
+      );
 
       const request: CreateLinkRequest = {
         originalURL: 'https://example.com',
@@ -350,6 +470,277 @@ describe('ShortioClient', () => {
       };
 
       await expect(client.createEncryptedLink(request)).rejects.toThrow('Invalid password');
+    });
+  });
+
+  describe('trackConversion with value', () => {
+    it('should append value as v param in beacon URL', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+
+      const result = client.trackConversion({
+        domain: 'example.com',
+        conversionId: 'purchase',
+        value: 49.99,
+      });
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        'https://example.com/.shortio/conversion?clid=test-click-id&c=purchase&v=49.99'
+      );
+      expect(result).toEqual({
+        success: true,
+        conversionId: 'purchase',
+        clid: 'test-click-id',
+        domain: 'example.com',
+        value: 49.99,
+      });
+    });
+
+    it('should send value without conversionId', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+
+      const result = client.trackConversion({
+        domain: 'example.com',
+        value: 10,
+      });
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        'https://example.com/.shortio/conversion?clid=test-click-id&v=10'
+      );
+      expect(result.value).toBe(10);
+    });
+
+    it('should not include v param when value is undefined', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+
+      client.trackConversion({ domain: 'example.com' });
+
+      const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(url).not.toContain('&v=');
+    });
+  });
+
+  describe('declarative conversion tracking', () => {
+    let observer: ReturnType<typeof client.observeConversions>;
+
+    afterEach(() => {
+      observer?.disconnect();
+      document.body.innerHTML = '';
+    });
+
+    it('should bind to <form> on submit', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const form = document.createElement('form');
+      form.setAttribute('data-shortio-conversion', 'signup');
+      document.body.appendChild(form);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      form.dispatchEvent(new Event('submit'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=signup')
+      );
+    });
+
+    it('should bind to <button> on click', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'cta');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=cta')
+      );
+    });
+
+    it('should bind to <a> on click', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const anchor = document.createElement('a');
+      anchor.setAttribute('data-shortio-conversion', 'link-click');
+      document.body.appendChild(anchor);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      anchor.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=link-click')
+      );
+    });
+
+    it('should bind to <input> on change', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.setAttribute('data-shortio-conversion', 'field-change');
+      document.body.appendChild(input);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      input.dispatchEvent(new Event('change'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=field-change')
+      );
+    });
+
+    it('should bind to <input type="submit"> on click', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const input = document.createElement('input');
+      input.type = 'submit';
+      input.setAttribute('data-shortio-conversion', 'form-submit');
+      document.body.appendChild(input);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      input.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=form-submit')
+      );
+    });
+
+    it('should read data-shortio-conversion-value and send as v param', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'purchase');
+      button.setAttribute('data-shortio-conversion-value', '29.99');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('v=29.99')
+      );
+    });
+
+    it('should ignore invalid/NaN value attributes', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'purchase');
+      button.setAttribute('data-shortio-conversion-value', 'not-a-number');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(url).not.toContain('&v=');
+    });
+
+    it('should treat empty data-shortio-conversion as undefined conversionId', () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', '');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(url).not.toContain('&c=');
+    });
+
+    it('should pick up dynamically added elements via MutationObserver', async () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      observer = client.observeConversions({ domain: 'example.com' });
+
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'dynamic');
+      document.body.appendChild(button);
+
+      // Wait for MutationObserver to process
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=dynamic')
+      );
+    });
+
+    it('should pick up descendants of dynamically added elements', async () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      observer = client.observeConversions({ domain: 'example.com' });
+
+      const wrapper = document.createElement('div');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'nested');
+      wrapper.appendChild(button);
+      document.body.appendChild(wrapper);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      button.dispatchEvent(new Event('click'));
+
+      expect(navigator.sendBeacon).toHaveBeenCalledWith(
+        expect.stringContaining('clid=test-click-id&c=nested')
+      );
+    });
+
+    it('should remove all listeners and stop observing on disconnect()', async () => {
+      history.replaceState({}, '', '?clid=test-click-id');
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'cta');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      observer.disconnect();
+
+      button.dispatchEvent(new Event('click'));
+      expect(navigator.sendBeacon).not.toHaveBeenCalled();
+
+      // Dynamically added elements should not be bound after disconnect
+      const newButton = document.createElement('button');
+      newButton.setAttribute('data-shortio-conversion', 'new');
+      document.body.appendChild(newButton);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      newButton.dispatchEvent(new Event('click'));
+      expect(navigator.sendBeacon).not.toHaveBeenCalled();
+    });
+
+    it('should work without clid in URL (conversion returns failure)', () => {
+      const button = document.createElement('button');
+      button.setAttribute('data-shortio-conversion', 'cta');
+      document.body.appendChild(button);
+
+      observer = client.observeConversions({ domain: 'example.com' });
+      button.dispatchEvent(new Event('click'));
+
+      // sendBeacon should not be called since trackConversion returns early without clid
+      expect(navigator.sendBeacon).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createSecure', () => {
+    it('should return securedOriginalURL with shortsecure:// protocol', async () => {
+      const result = await createSecure('https://example.com');
+
+      expect(result.securedOriginalURL).toMatch(/^shortsecure:\/\//);
+    });
+
+    it('should return securedShortUrl starting with #', async () => {
+      const result = await createSecure('https://example.com');
+
+      expect(result.securedShortUrl).toMatch(/^#/);
+    });
+
+    it('should call crypto.subtle.generateKey with AES-GCM', async () => {
+      await createSecure('https://example.com');
+
+      expect(crypto.subtle.generateKey).toHaveBeenCalledWith(
+        { name: 'AES-GCM', length: 128 },
+        true,
+        ['encrypt', 'decrypt']
+      );
+    });
+
+    it('should propagate crypto errors', async () => {
+      vi.spyOn(crypto.subtle, 'generateKey').mockRejectedValueOnce(new Error('Crypto not available'));
+
+      await expect(createSecure('https://example.com')).rejects.toThrow('Crypto not available');
     });
   });
 });

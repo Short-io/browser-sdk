@@ -1,14 +1,6 @@
 # Short.io Browser SDK
 
-A lightweight TypeScript/JavaScript SDK for Short.io's URL shortening API, designed specifically for browser environments with public key authentication.
-
-## Features
-
-- 🌐 **Browser-first**: Optimized for client-side applications
-- 🔑 **Public Key Auth**: Works with Short.io public API keys
-- 📦 **Lightweight**: Minimal dependencies, small bundle size
-- 🎯 **TypeScript**: Full type safety with TypeScript support
-- 🚀 **Modern**: Uses fetch API and ES modules
+A lightweight TypeScript/JavaScript SDK for [Short.io](https://short.io)'s URL shortening API, designed for browser environments with public key authentication. Zero runtime dependencies.
 
 ## Installation
 
@@ -21,7 +13,6 @@ npm install @short.io/client-browser
 ```typescript
 import { createClient } from '@short.io/client-browser';
 
-// Initialize the client with your public API key
 const client = createClient({
   publicKey: 'your-public-api-key'
 });
@@ -31,7 +22,6 @@ const link = await client.createLink({
   originalURL: 'https://example.com/very-long-url',
   domain: 'your-domain.com'
 });
-
 console.log(link.shortURL); // https://your-domain.com/abc123
 
 // Expand a short link
@@ -39,7 +29,6 @@ const expanded = await client.expandLink({
   domain: 'your-domain.com',
   path: 'abc123'
 });
-
 console.log(expanded.originalURL); // https://example.com/very-long-url
 ```
 
@@ -49,67 +38,193 @@ console.log(expanded.originalURL); // https://example.com/very-long-url
 
 Creates a new Short.io client instance.
 
-**Parameters:**
-- `config.publicKey` (string): Your Short.io public API key
-- `config.baseUrl` (string, optional): Custom API base URL (defaults to `https://api.short.io/links`)
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `config.publicKey` | `string` | Yes | Your Short.io public API key |
+| `config.baseUrl` | `string` | No | Custom API base URL (default: `https://api.short.io`) |
 
 ### `client.createLink(request)`
 
 Creates a new short link.
 
-**Parameters:**
-- `request.originalURL` (string): The URL to shorten
-- `request.domain` (string): Your Short.io domain
-- `request.path` (string, optional): Custom path for the short link
-- `request.title` (string, optional): Title for the link
-- `request.tags` (string[], optional): Tags for organization
-- `request.allowDuplicates` (boolean, optional): Allow duplicate links
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `domain` | `string` | Yes | Your Short.io domain |
+| `originalURL` | `string` | Yes | The URL to shorten |
+| `path` | `string` | No | Custom path for the short link |
+| `title` | `string` | No | Link title |
+| `tags` | `string[]` | No | Tags for organization |
+| `folderId` | `string` | No | Folder ID |
+| `cloaking` | `boolean` | No | Enable link cloaking |
+| `password` | `string` | No | Password-protect the link |
+| `passwordContact` | `boolean` | No | Require contact info with password |
+| `redirectType` | `301 \| 302 \| 307 \| 308` | No | HTTP redirect status code |
+| `utmSource` | `string` | No | UTM source parameter |
+| `utmMedium` | `string` | No | UTM medium parameter |
+| `utmCampaign` | `string` | No | UTM campaign parameter |
+| `utmContent` | `string` | No | UTM content parameter |
+| `utmTerm` | `string` | No | UTM term parameter |
+| `androidURL` | `string` | No | Redirect URL for Android devices |
+| `iphoneURL` | `string` | No | Redirect URL for iPhones |
+| `clicksLimit` | `number` | No | Maximum number of clicks allowed |
+| `skipQS` | `boolean` | No | Skip query string forwarding |
+| `archived` | `boolean` | No | Create link as archived |
+| `splitURL` | `string` | No | A/B test destination URL |
+| `splitPercent` | `number` | No | A/B test traffic split percentage |
+| `integrationAdroll` | `string` | No | AdRoll integration pixel |
+| `integrationFB` | `string` | No | Facebook integration pixel |
+| `integrationGA` | `string` | No | Google Analytics integration |
+| `integrationGTM` | `string` | No | Google Tag Manager integration |
 
-**Returns:** Promise<CreateLinkResponse>
+Returns `Promise<CreateLinkResponse>` with the full link object including `shortURL`, `secureShortURL`, `id`, and all configured properties.
 
 ### `client.expandLink(request)`
 
 Expands a short link to get its details.
 
-**Parameters:**
-- `request.domain` (string): The Short.io domain
-- `request.path` (string): The path of the short link
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `domain` | `string` | Yes | The Short.io domain |
+| `path` | `string` | Yes | The path of the short link |
 
-**Returns:** Promise<ExpandLinkResponse>
+Returns `Promise<ExpandLinkResponse>` (same shape as `CreateLinkResponse`).
 
-## Usage Examples
+### `client.createEncryptedLink(request)`
 
-### Basic Link Creation
+Creates an encrypted short link using AES-GCM encryption. The original URL is encrypted client-side before being sent to the API; the decryption key is placed in the URL fragment (hash) and never sent to the server.
 
-```typescript
-const link = await client.createLink({
-  originalURL: 'https://github.com/Short-io/client-browser',
-  domain: 'your-domain.com',
-  title: 'Short.io Browser SDK'
-});
-```
-
-### Custom Path
+Takes the same parameters as `createLink`. Returns `Promise<CreateLinkResponse>` where `shortURL` includes the `#key` fragment for decryption.
 
 ```typescript
-const link = await client.createLink({
-  originalURL: 'https://docs.short.io',
-  domain: 'your-domain.com',
-  path: 'docs'
+const link = await client.createEncryptedLink({
+  originalURL: 'https://sensitive-content.example.com/private',
+  domain: 'your-domain.com'
 });
+// link.shortURL → https://your-domain.com/abc123#<base64-key>
 ```
 
-### With Tags
+### `client.trackConversion(options)`
+
+Tracks a conversion event using `navigator.sendBeacon()`. Reads the `clid` (click ID) query parameter from the current page URL to attribute the conversion.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `domain` | `string` | Yes | Your Short.io domain |
+| `conversionId` | `string` | No | Custom conversion identifier |
+| `value` | `number` | No | Monetary or numeric value for the conversion |
+
+Returns `ConversionTrackingResult`:
 
 ```typescript
-const link = await client.createLink({
-  originalURL: 'https://example.com',
-  domain: 'your-domain.com',
-  tags: ['marketing', 'campaign-2024']
-});
+{
+  success: boolean;    // true if clid was found and beacon sent
+  conversionId?: string;
+  clid?: string;
+  domain: string;
+  value?: number;
+}
 ```
 
-### Error Handling
+```typescript
+const result = client.trackConversion({
+  domain: 'your-domain.com',
+  conversionId: 'purchase',
+  value: 49.99
+});
+
+if (result.success) {
+  console.log('Conversion tracked for click:', result.clid);
+}
+```
+
+### `client.getClickId()`
+
+Returns the `clid` query parameter from the current page URL, or `null` if not present.
+
+```typescript
+const clickId = client.getClickId();
+```
+
+### `client.observeConversions(options)`
+
+Enables declarative conversion tracking via HTML `data-` attributes. Scans the DOM for elements with `data-shortio-conversion` and automatically binds event listeners. Also watches for dynamically added elements using a `MutationObserver`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `domain` | `string` | Yes | Your Short.io domain |
+
+Returns a `ConversionObserver` with a `disconnect()` method to remove all listeners and stop observing.
+
+**HTML attributes:**
+
+| Attribute | Description |
+|-----------|-------------|
+| `data-shortio-conversion` | Conversion identifier (empty string for no ID) |
+| `data-shortio-conversion-value` | Numeric value for the conversion (ignored if not a valid number) |
+
+**Event binding by element type:**
+
+| Element | Event |
+|---------|-------|
+| `<form>` | `submit` |
+| `<input>` (non-submit) | `change` |
+| `<button>`, `<a>`, `<input type="submit">` | `click` |
+
+```html
+<!-- Declarative conversion tracking -->
+<form data-shortio-conversion="signup">...</form>
+<button data-shortio-conversion="purchase" data-shortio-conversion-value="29.99">Buy Now</button>
+<a href="/pricing" data-shortio-conversion="cta-click">View Pricing</a>
+```
+
+```typescript
+const observer = client.observeConversions({ domain: 'your-domain.com' });
+
+// Later, to stop tracking:
+observer.disconnect();
+```
+
+## Bundle Formats
+
+| Format | File | Use case |
+|--------|------|----------|
+| ES Modules | `dist/index.esm.js` | Modern bundlers (Vite, webpack, etc.) |
+| CommonJS | `dist/index.js` | Node.js / legacy bundlers |
+| UMD | `dist/index.umd.js` | Direct `<script>` tag usage |
+
+### Direct Browser Usage (UMD)
+
+```html
+<script src="https://unpkg.com/@short.io/client-browser/dist/index.umd.js"></script>
+<script>
+  const client = ShortioClient.createClient({
+    publicKey: 'your-public-api-key'
+  });
+</script>
+```
+
+## TypeScript
+
+Full type definitions are included. All types are exported:
+
+```typescript
+import type {
+  ShortioConfig,
+  CreateLinkRequest,
+  CreateLinkResponse,
+  ExpandLinkRequest,
+  ExpandLinkResponse,
+  ConversionTrackingOptions,
+  ConversionTrackingResult,
+  ObserveConversionsOptions,
+  ConversionObserver,
+  ApiError
+} from '@short.io/client-browser';
+```
+
+## Error Handling
+
+API errors throw a standard `Error` with the message from the Short.io API response:
 
 ```typescript
 try {
@@ -122,61 +237,22 @@ try {
 }
 ```
 
-## Browser Support
-
-This SDK works in all modern browsers that support:
-- Fetch API
-- ES2018 features
-- Promises/async-await
-
-For older browsers, you may need polyfills for the fetch API.
-
-## Bundle Formats
-
-The SDK is available in multiple formats:
-
-- **ES Modules**: `dist/index.esm.js` (recommended for modern bundlers)
-- **CommonJS**: `dist/index.js` (Node.js compatibility)
-- **UMD**: `dist/index.umd.js` (direct browser usage)
-
-### Direct Browser Usage
-
-```html
-<script src="https://unpkg.com/@short.io/client-browser/dist/index.umd.js"></script>
-<script>
-  const client = ShortioClient.createClient({
-    publicKey: 'your-public-api-key'
-  });
-</script>
-```
-
 ## Getting Your API Key
 
 1. Visit your [Short.io dashboard](https://app.short.io)
-2. Go to Integrations & API
-3. Create a new public API key for your domain
+2. Go to **Integrations & API**
+3. Create a new **public** API key for your domain
 
-⚠️ **Security Note**: Public keys are safe to use in browser environments but have limited permissions. Never use private API keys in client-side code.
+> **Security:** Public keys are safe to use in browser environments but have limited permissions. Never use private API keys in client-side code.
 
-## TypeScript Support
+## Browser Support
 
-The SDK includes full TypeScript definitions. All methods and responses are fully typed:
-
-```typescript
-import type { CreateLinkRequest, CreateLinkResponse } from '@short.io/client-browser';
-
-const request: CreateLinkRequest = {
-  originalURL: 'https://example.com',
-  domain: 'your-domain.com'
-};
-
-const response: CreateLinkResponse = await client.createLink(request);
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+Requires browsers supporting:
+- [Fetch API](https://caniuse.com/fetch)
+- [Web Crypto API](https://caniuse.com/cryptography) (for encrypted links)
+- [Beacon API](https://caniuse.com/beacon) (for conversion tracking)
+- [MutationObserver](https://caniuse.com/mutationobserver) (for declarative conversion tracking)
 
 ## License
 
-MIT © Short.io
+MIT
