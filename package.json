@@ -29,7 +29,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Short-io/client-browser.git"
+    "url": "https://github.com/Short-io/browser-sdk.git"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.0.0",
