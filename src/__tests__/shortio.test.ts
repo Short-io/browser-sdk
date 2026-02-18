@@ -1,4 +1,4 @@
-import { ShortioClient, createClient, createSecure } from '../shortio';
+import { ShortioClient, createClient, createSecure, trackConversion, getClickId, observeConversions } from '../shortio';
 import type { CreateLinkRequest, ExpandLinkRequest, ConversionTrackingOptions } from '../types';
 import { http, HttpResponse } from 'msw';
 import { setupWorker } from 'msw/browser';
@@ -282,7 +282,7 @@ describe('ShortioClient', () => {
         conversionId: 'purchase'
       };
 
-      const result = client.trackConversion(options);
+      const result = trackConversion(options);
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
         'https://example.com/.shortio/conversion?clid=test-click-id&c=purchase'
@@ -302,7 +302,7 @@ describe('ShortioClient', () => {
         domain: 'example.com'
       };
 
-      const result = client.trackConversion(options);
+      const result = trackConversion(options);
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
         'https://example.com/.shortio/conversion?clid=test-click-id'
@@ -320,7 +320,7 @@ describe('ShortioClient', () => {
         conversionId: 'purchase'
       };
 
-      const result = client.trackConversion(options);
+      const result = trackConversion(options);
 
       expect(navigator.sendBeacon).not.toHaveBeenCalled();
       expect(result).toEqual({
@@ -329,7 +329,7 @@ describe('ShortioClient', () => {
       });
     });
 
-    it('should handle errors gracefully', () => {
+    it('should propagate sendBeacon errors', () => {
       history.replaceState({}, '', '?clid=test-click-id');
       vi.spyOn(navigator, 'sendBeacon').mockImplementation(() => {
         throw new Error('Network error');
@@ -340,18 +340,13 @@ describe('ShortioClient', () => {
         conversionId: 'purchase'
       };
 
-      const result = client.trackConversion(options);
-
-      expect(result).toEqual({
-        success: false,
-        domain: 'example.com'
-      });
+      expect(() => trackConversion(options)).toThrow('Network error');
     });
 
     it('should extract clid when URL has multiple query params', () => {
       history.replaceState({}, '', '?utm_source=twitter&clid=abc&ref=home');
 
-      const result = client.trackConversion({ domain: 'example.com' });
+      const result = trackConversion({ domain: 'example.com' });
 
       expect(result.success).toBe(true);
       expect(result.clid).toBe('abc');
@@ -362,7 +357,7 @@ describe('ShortioClient', () => {
     it('should return clid from URL params', () => {
       history.replaceState({}, '', '?clid=test-click-id&other=param');
 
-      const result = client.getClickId();
+      const result = getClickId();
 
       expect(result).toBe('test-click-id');
     });
@@ -370,13 +365,13 @@ describe('ShortioClient', () => {
     it('should return null when no clid in URL', () => {
       history.replaceState({}, '', '?other=param');
 
-      const result = client.getClickId();
+      const result = getClickId();
 
       expect(result).toBeNull();
     });
 
     it('should return null when search string is empty', () => {
-      expect(client.getClickId()).toBeNull();
+      expect(getClickId()).toBeNull();
     });
   });
 
@@ -477,7 +472,7 @@ describe('ShortioClient', () => {
     it('should append value as v param in beacon URL', () => {
       history.replaceState({}, '', '?clid=test-click-id');
 
-      const result = client.trackConversion({
+      const result = trackConversion({
         domain: 'example.com',
         conversionId: 'purchase',
         value: 49.99,
@@ -498,7 +493,7 @@ describe('ShortioClient', () => {
     it('should send value without conversionId', () => {
       history.replaceState({}, '', '?clid=test-click-id');
 
-      const result = client.trackConversion({
+      const result = trackConversion({
         domain: 'example.com',
         value: 10,
       });
@@ -512,15 +507,15 @@ describe('ShortioClient', () => {
     it('should not include v param when value is undefined', () => {
       history.replaceState({}, '', '?clid=test-click-id');
 
-      client.trackConversion({ domain: 'example.com' });
+      trackConversion({ domain: 'example.com' });
 
       const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
       expect(url).not.toContain('&v=');
     });
   });
 
-  describe('declarative conversion tracking', () => {
-    let observer: ReturnType<typeof client.observeConversions>;
+  describe('observeConversions', () => {
+    let observer: ReturnType<typeof observeConversions>;
 
     afterEach(() => {
       observer?.disconnect();
@@ -533,7 +528,7 @@ describe('ShortioClient', () => {
       form.setAttribute('data-shortio-conversion', 'signup');
       document.body.appendChild(form);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       form.dispatchEvent(new Event('submit'));
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
@@ -547,7 +542,7 @@ describe('ShortioClient', () => {
       button.setAttribute('data-shortio-conversion', 'cta');
       document.body.appendChild(button);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       button.dispatchEvent(new Event('click'));
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
@@ -561,7 +556,7 @@ describe('ShortioClient', () => {
       anchor.setAttribute('data-shortio-conversion', 'link-click');
       document.body.appendChild(anchor);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       anchor.dispatchEvent(new Event('click'));
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
@@ -576,7 +571,7 @@ describe('ShortioClient', () => {
       input.setAttribute('data-shortio-conversion', 'field-change');
       document.body.appendChild(input);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       input.dispatchEvent(new Event('change'));
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
@@ -591,7 +586,7 @@ describe('ShortioClient', () => {
       input.setAttribute('data-shortio-conversion', 'form-submit');
       document.body.appendChild(input);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       input.dispatchEvent(new Event('click'));
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
@@ -606,7 +601,7 @@ describe('ShortioClient', () => {
       button.setAttribute('data-shortio-conversion-value', '29.99');
       document.body.appendChild(button);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       button.dispatchEvent(new Event('click'));
 
       expect(navigator.sendBeacon).toHaveBeenCalledWith(
@@ -621,7 +616,7 @@ describe('ShortioClient', () => {
       button.setAttribute('data-shortio-conversion-value', 'not-a-number');
       document.body.appendChild(button);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       button.dispatchEvent(new Event('click'));
 
       const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
@@ -634,7 +629,7 @@ describe('ShortioClient', () => {
       button.setAttribute('data-shortio-conversion', '');
       document.body.appendChild(button);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       button.dispatchEvent(new Event('click'));
 
       const url = (navigator.sendBeacon as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
@@ -643,7 +638,7 @@ describe('ShortioClient', () => {
 
     it('should pick up dynamically added elements via MutationObserver', async () => {
       history.replaceState({}, '', '?clid=test-click-id');
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
 
       const button = document.createElement('button');
       button.setAttribute('data-shortio-conversion', 'dynamic');
@@ -661,7 +656,7 @@ describe('ShortioClient', () => {
 
     it('should pick up descendants of dynamically added elements', async () => {
       history.replaceState({}, '', '?clid=test-click-id');
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
 
       const wrapper = document.createElement('div');
       const button = document.createElement('button');
@@ -684,7 +679,7 @@ describe('ShortioClient', () => {
       button.setAttribute('data-shortio-conversion', 'cta');
       document.body.appendChild(button);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       observer.disconnect();
 
       button.dispatchEvent(new Event('click'));
@@ -706,7 +701,7 @@ describe('ShortioClient', () => {
       button.setAttribute('data-shortio-conversion', 'cta');
       document.body.appendChild(button);
 
-      observer = client.observeConversions({ domain: 'example.com' });
+      observer = observeConversions({ domain: 'example.com' });
       button.dispatchEvent(new Event('click'));
 
       // sendBeacon should not be called since trackConversion returns early without clid

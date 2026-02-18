@@ -43,6 +43,105 @@ export const createSecure = async (originalURL: string): Promise<{ securedOrigin
   }
 };
 
+export function trackConversion(options: ConversionTrackingOptions): ConversionTrackingResult {
+  const urlParams = new URLSearchParams(window.location.search);
+  const clid = urlParams.get('clid');
+
+  if (!clid) {
+    return {
+      success: false,
+      domain: options.domain
+    };
+  }
+
+  const conversionUrl = `https://${options.domain}/.shortio/conversion`;
+  const params = new URLSearchParams({ clid });
+
+  if (options.conversionId) {
+    params.append('c', options.conversionId);
+  }
+
+  if (options.value !== undefined) {
+    params.append('v', String(options.value));
+  }
+
+  const fullUrl = `${conversionUrl}?${params}`;
+
+  navigator.sendBeacon(fullUrl);
+
+  return {
+    success: true,
+    conversionId: options.conversionId,
+    clid,
+    domain: options.domain,
+    value: options.value,
+  };
+}
+
+export function getClickId(): string | null {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.get('clid');
+}
+
+export function observeConversions(options: ObserveConversionsOptions): ConversionObserver {
+  const listeners: Array<{ element: Element; event: string; handler: EventListener }> = [];
+
+  const getEvent = (el: Element): string => {
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'form') return 'submit';
+    if (tag === 'input' && (el as HTMLInputElement).type !== 'submit') return 'change';
+    return 'click';
+  };
+
+  const bind = (el: Element): void => {
+    const conversionIdAttr = el.getAttribute('data-shortio-conversion');
+    const conversionId = conversionIdAttr || undefined;
+    const valueAttr = el.getAttribute('data-shortio-conversion-value');
+    const parsedValue = valueAttr !== null ? Number(valueAttr) : undefined;
+    const value = parsedValue !== undefined && !isNaN(parsedValue) ? parsedValue : undefined;
+    const event = getEvent(el);
+    const handler = (): void => {
+      trackConversion({ domain: options.domain, conversionId, value });
+    };
+    el.addEventListener(event, handler);
+    listeners.push({ element: el, event, handler });
+  };
+
+  const bindAll = (root: Element | Document): void => {
+    const elements = root.querySelectorAll('[data-shortio-conversion]');
+    elements.forEach(bind);
+  };
+
+  // Bind existing elements
+  bindAll(document);
+
+  // Observe dynamically added elements
+  const mutationObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        const el = node as Element;
+        if (el.hasAttribute('data-shortio-conversion')) {
+          bind(el);
+        }
+        bindAll(el);
+      });
+    }
+  });
+
+  mutationObserver.observe(document.body, { childList: true, subtree: true });
+
+  return {
+    disconnect(): void {
+      mutationObserver.disconnect();
+      for (const { element, event, handler } of listeners) {
+        element.removeEventListener(event, handler);
+      }
+      listeners.length = 0;
+    },
+  };
+}
+
 export class ShortioClient {
   private config: ShortioConfig;
 
@@ -58,7 +157,7 @@ export class ShortioClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.config.baseUrl}${endpoint}`;
-    
+
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -92,112 +191,6 @@ export class ShortioClient {
     });
 
     return this.makeRequest<ExpandLinkResponse>(`/links/expand?${params}`);
-  }
-
-  trackConversion(options: ConversionTrackingOptions): ConversionTrackingResult {
-    const urlParams = new URLSearchParams(window.location.search);
-    const clid = urlParams.get('clid');
-    
-    if (!clid) {
-      return {
-        success: false,
-        domain: options.domain
-      };
-    }
-
-    const conversionUrl = `https://${options.domain}/.shortio/conversion`;
-    const params = new URLSearchParams({ clid });
-    
-    if (options.conversionId) {
-      params.append('c', options.conversionId);
-    }
-
-    if (options.value !== undefined) {
-      params.append('v', String(options.value));
-    }
-
-    const fullUrl = `${conversionUrl}?${params}`;
-
-    try {
-      navigator.sendBeacon(fullUrl);
-
-      return {
-        success: true,
-        conversionId: options.conversionId,
-        clid,
-        domain: options.domain,
-        value: options.value,
-      };
-    } catch {
-      return {
-        success: false,
-        domain: options.domain
-      };
-    }
-  }
-
-  getClickId(): string | null {
-    const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get('clid');
-  }
-
-  observeConversions(options: ObserveConversionsOptions): ConversionObserver {
-    const listeners: Array<{ element: Element; event: string; handler: EventListener }> = [];
-
-    const getEvent = (el: Element): string => {
-      const tag = el.tagName.toLowerCase();
-      if (tag === 'form') return 'submit';
-      if (tag === 'input' && (el as HTMLInputElement).type !== 'submit') return 'change';
-      return 'click';
-    };
-
-    const bind = (el: Element): void => {
-      const conversionIdAttr = el.getAttribute('data-shortio-conversion');
-      const conversionId = conversionIdAttr || undefined;
-      const valueAttr = el.getAttribute('data-shortio-conversion-value');
-      const parsedValue = valueAttr !== null ? Number(valueAttr) : undefined;
-      const value = parsedValue !== undefined && !isNaN(parsedValue) ? parsedValue : undefined;
-      const event = getEvent(el);
-      const handler = (): void => {
-        this.trackConversion({ domain: options.domain, conversionId, value });
-      };
-      el.addEventListener(event, handler);
-      listeners.push({ element: el, event, handler });
-    };
-
-    const bindAll = (root: Element | Document): void => {
-      const elements = root.querySelectorAll('[data-shortio-conversion]');
-      elements.forEach(bind);
-    };
-
-    // Bind existing elements
-    bindAll(document);
-
-    // Observe dynamically added elements
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        mutation.addedNodes.forEach((node) => {
-          if (node.nodeType !== Node.ELEMENT_NODE) return;
-          const el = node as Element;
-          if (el.hasAttribute('data-shortio-conversion')) {
-            bind(el);
-          }
-          bindAll(el);
-        });
-      }
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    return {
-      disconnect(): void {
-        observer.disconnect();
-        for (const { element, event, handler } of listeners) {
-          element.removeEventListener(event, handler);
-        }
-        listeners.length = 0;
-      },
-    };
   }
 
   async createEncryptedLink(request: CreateLinkRequest): Promise<CreateLinkResponse> {

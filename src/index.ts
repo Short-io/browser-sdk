@@ -1,4 +1,4 @@
-export { ShortioClient, createClient } from './shortio';
+export { ShortioClient, createClient, trackConversion, getClickId, observeConversions } from './shortio';
 export type {
   ShortioConfig,
   CreateLinkRequest,
