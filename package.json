@@ -27,10 +27,15 @@
   ],
   "author": "Short.io",
   "license": "MIT",
+  "private": false,
   "repository": {
     "type": "git",
-    "url": "https://github.com/Short-io/browser-sdk.git"
+    "url": "git+https://github.com/Short-io/browser-sdk.git"
   },
+  "bugs": {
+    "url": "https://github.com/Short-io/browser-sdk/issues"
+  },
+  "homepage": "https://github.com/Short-io/browser-sdk#readme",
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@rollup/plugin-typescript": "^11.0.0",
