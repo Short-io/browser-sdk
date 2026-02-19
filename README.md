@@ -4,6 +4,26 @@ A lightweight TypeScript/JavaScript SDK for [Short.io](https://short.io)'s URL s
 
 ## Installation
 
+### CDN (no build step required)
+
+Use directly in the browser — no bundler needed:
+
+```html
+<script type="module">
+  import { createClient } from 'https://cdn.jsdelivr.net/npm/@short.io/client-browser/dist/index.esm.js';
+
+  const client = createClient({ publicKey: 'your-public-api-key' });
+
+  const link = await client.createLink({
+    originalURL: 'https://example.com/very-long-url',
+    domain: 'your-domain.com'
+  });
+  console.log(link.shortURL);
+</script>
+```
+
+### npm
+
 ```bash
 npm install @short.io/client-browser
 ```
@@ -103,7 +123,25 @@ const link = await client.createEncryptedLink({
 // link.shortURL → https://your-domain.com/abc123#<base64-key>
 ```
 
-### `client.trackConversion(options)`
+## Conversion Tracking
+
+Conversion functions are standalone — no client instance needed. Import them directly:
+
+```typescript
+import { trackConversion, getClickId, observeConversions } from '@short.io/client-browser';
+```
+
+Or via CDN:
+
+```html
+<script type="module">
+  import { observeConversions } from 'https://cdn.jsdelivr.net/npm/@short.io/client-browser/dist/index.esm.js';
+
+  observeConversions({ domain: 'your-domain.com' });
+</script>
+```
+
+### `trackConversion(options)`
 
 Tracks a conversion event using `navigator.sendBeacon()`. Reads the `clid` (click ID) query parameter from the current page URL to attribute the conversion.
 
@@ -126,7 +164,7 @@ Returns `ConversionTrackingResult`:
 ```
 
 ```typescript
-const result = client.trackConversion({
+const result = trackConversion({
   domain: 'your-domain.com',
   conversionId: 'purchase',
   value: 49.99
@@ -137,15 +175,15 @@ if (result.success) {
 }
 ```
 
-### `client.getClickId()`
+### `getClickId()`
 
 Returns the `clid` query parameter from the current page URL, or `null` if not present.
 
 ```typescript
-const clickId = client.getClickId();
+const clickId = getClickId();
 ```
 
-### `client.observeConversions(options)`
+### `observeConversions(options)`
 
 Enables declarative conversion tracking via HTML `data-` attributes. Scans the DOM for elements with `data-shortio-conversion` and automatically binds event listeners. Also watches for dynamically added elements using a `MutationObserver`.
 
@@ -178,7 +216,7 @@ Returns a `ConversionObserver` with a `disconnect()` method to remove all listen
 ```
 
 ```typescript
-const observer = client.observeConversions({ domain: 'your-domain.com' });
+const observer = observeConversions({ domain: 'your-domain.com' });
 
 // Later, to stop tracking:
 observer.disconnect();
@@ -191,17 +229,6 @@ observer.disconnect();
 | ES Modules | `dist/index.esm.js` | Modern bundlers (Vite, webpack, etc.) |
 | CommonJS | `dist/index.js` | Node.js / legacy bundlers |
 | UMD | `dist/index.umd.js` | Direct `<script>` tag usage |
-
-### Direct Browser Usage (UMD)
-
-```html
-<script src="https://unpkg.com/@short.io/client-browser/dist/index.umd.js"></script>
-<script>
-  const client = ShortioClient.createClient({
-    publicKey: 'your-public-api-key'
-  });
-</script>
-```
 
 ## TypeScript
 
