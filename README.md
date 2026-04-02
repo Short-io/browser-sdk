@@ -63,6 +63,14 @@ Creates a new Short.io client instance.
 | `config.publicKey` | `string` | Yes | Your Short.io public API key |
 | `config.baseUrl` | `string` | No | Custom API base URL (default: `https://api.short.io`) |
 
+**Alternative API endpoints:**
+
+| Endpoint | Use case |
+|----------|----------|
+| `https://api.short.io` | Default — standard API |
+| `https://enterprise-api.short.io` | Enterprise customers with dedicated IPs |
+| `https://api.shortio.cn` | Users in mainland China |
+
 ### `client.createLink(request)`
 
 Creates a new short link.
