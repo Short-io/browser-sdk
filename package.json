@@ -37,11 +37,12 @@
   },
   "homepage": "https://github.com/Short-io/browser-sdk#readme",
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-typescript": "^12.3.0",
-    "@vitest/browser": "^4.1.8",
     "@typescript-eslint/eslint-plugin": "^8.60.1",
     "@typescript-eslint/parser": "^8.60.1",
+    "@vitest/browser": "^4.1.8",
     "eslint": "^10.4.1",
     "msw": "^2.14.6",
     "playwright": "^1.60.0",
