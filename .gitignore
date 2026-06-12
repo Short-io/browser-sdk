@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+__screenshots__/
 *.log
 .DS_Store
 .env
